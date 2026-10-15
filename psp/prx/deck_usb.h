@@ -14,6 +14,8 @@ typedef struct {
     int iso_sent, iso_err, iso_last_ret;
     int ret_register, ret_bus, ret_driver, ret_activate;
     int ret_charge_syscon, ret_charge_power;
+    int variant;               /* index into the PRX's descriptor layouts (see descriptors.c) */
+    int variant_ret[8];        /* sceUsbStart result per layout tried */
     int nreq;                  /* control requests seen; last 8 kept raw in req_log */
     unsigned char req_log[8][8];
 } deck_usb_info;

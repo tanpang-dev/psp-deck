@@ -21,7 +21,7 @@ enum {
 };
 
 static struct UsbEndpoint g_ep[4] = { {0, 0, 0}, {1, 0, 0}, {2, 0, 0}, {3, 0, 0} };
-static struct UsbInterface g_if = { -1, 0, 1 + 2 * DECK_UAC };
+static struct UsbInterface g_if = { -1, 0, 3 };
 
 static SceUID g_ev = -1, g_tx_sema = -1, g_mic_thid = -1;
 static struct UsbbdDeviceRequest g_rx_req, g_tx_req;
@@ -84,7 +84,7 @@ static int drv_start(int size, void *args) { return 0; }
 static int drv_stop(int size, void *args) { detach(); return 0; }
 
 static struct UsbDriver g_driver = {
-    DRIVER_NAME, 3 + DECK_UAC, g_ep, &g_if,
+    DRIVER_NAME, 4, g_ep, &g_if,
     &deck_dev_hi, &deck_config_hi, &deck_dev_full, &deck_config_full,
     NULL, process_request, change_setting, attach, detach, configure,
     drv_start, drv_stop, NULL,
@@ -100,7 +100,8 @@ static const short g_tone[50] = {
 };
 
 static struct UsbbdDeviceRequest g_iso_req[2];
-static short g_iso_buf[2][32] __attribute__((aligned(64)));
+static short g_iso_buf[2][64] __attribute__((aligned(64)));
+_Static_assert(sizeof(g_iso_buf[0]) >= MIC_MAX_PACKET, "iso buffer smaller than one packet");
 static int g_tone_pos, g_rate_acc;
 
 static void on_iso0(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO0); }
@@ -169,6 +170,37 @@ static int mic_thread(SceSize args, void *argp)
 
 /* ---- exports ---- */
 
+/* Tries each descriptor layout until the bus driver accepts it; every result lands in g_info. */
+static int start_variants(void)
+{
+    int v, ret = -1;
+
+#ifdef NO_UAC
+    v = DECK_VARIANT_NO_UAC;
+#else
+    v = 0;
+#endif
+    for (; v < DECK_NVARIANTS; v++) {
+        int uac = deck_variants[v].uac;
+
+        deck_desc_apply(v);
+        g_driver.numEndpoints = uac ? 4 : 3;
+        g_if.numInterfaces = uac ? 3 : 1;
+        g_info.variant = v;
+        ret = g_info.ret_register = sceUsbbdRegister(&g_driver);
+        if (ret >= 0)
+            ret = g_info.ret_bus = sceUsbStart(PSP_USBBUS_DRIVERNAME, 0, 0);
+        if (ret >= 0)
+            ret = g_info.ret_driver = sceUsbStart(DRIVER_NAME, 0, 0);
+        g_info.variant_ret[v] = ret;
+        if (ret >= 0)
+            return ret;
+        sceUsbStop(PSP_USBBUS_DRIVERNAME, 0, 0);
+        sceUsbbdUnregister(&g_driver);
+    }
+    return ret;
+}
+
 int deckUsbStart(void)
 {
     int k1 = pspSdkSetK1(0), ret;
@@ -177,17 +209,13 @@ int deckUsbStart(void)
         pspSdkSetK1(k1);
         return 0;
     }
-    ret = g_info.ret_register = sceUsbbdRegister(&g_driver);
-    if (ret >= 0)
-        ret = g_info.ret_bus = sceUsbStart(PSP_USBBUS_DRIVERNAME, 0, 0);
-    if (ret >= 0)
-        ret = g_info.ret_driver = sceUsbStart(DRIVER_NAME, 0, 0);
+    ret = start_variants();
     if (ret >= 0)
         ret = g_info.ret_activate = sceUsbActivate(DECK_PID);
     if (ret >= 0) {
         g_info.ret_charge_syscon = sceSysconPermitChargeBattery();
         g_info.ret_charge_power = scePowerBatteryPermitCharging();
-        if (DECK_UAC) {
+        if (deck_variants[g_info.variant].uac) {
             g_mic_thid = sceKernelCreateThread("DeckMic", mic_thread, 16, 0x1000, 0, NULL);
             if (g_mic_thid >= 0)
                 sceKernelStartThread(g_mic_thid, 0, NULL);

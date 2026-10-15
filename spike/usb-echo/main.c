@@ -65,6 +65,10 @@ static void show(const char *prx, int mod, int start)
     printf("register %08X bus %08X drv %08X act %08X\n", in.ret_register, in.ret_bus, in.ret_driver, in.ret_activate);
     printf("charge syscon %08X power %08X  charging=%d batt=%d%%   \n\n",
            in.ret_charge_syscon, in.ret_charge_power, scePowerIsBatteryCharging(), scePowerGetBatteryLifePercent());
+    printf("layout %d  tried:", in.variant);
+    for (i = 0; i <= in.variant && i < 8; i++)
+        printf(" %d=%08X", i, in.variant_ret[i]);
+    printf("\n");
     printf("speed %d (%s)            \n", in.speed, in.speed == 2 ? "hi 480M" : in.speed == 1 ? "full 12M" : "detached");
     printf("rx %d  tx %d  tx_timeouts %d          \n", in.rx_frames, in.tx_frames, in.tx_timeouts);
     printf("echoed %d  bytes %u  last read %d write %d          \n\n", g_echoed, g_bytes, g_last_read, g_last_write);
