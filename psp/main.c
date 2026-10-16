@@ -6,6 +6,7 @@
 #include <pspsdk.h>
 #include <stdio.h>
 #include <string.h>
+#include "apps.h"
 #include "deck_usb.h"
 #include "ui.h"
 #include "../proto/deck_proto.h"
@@ -169,6 +170,9 @@ static int link_thread(SceSize a, void *p)
         case DECK_M_LABELS:
             on_labels(pl, len);
             break;
+        case DECK_M_APP:
+            apps_on_message(pl, len);
+            break;
         }
     }
     return 0;
@@ -179,6 +183,13 @@ static void send_button(unsigned mask, int down)
     uint8_t p[8] = { mask, mask >> 8, mask >> 16, mask >> 24, down };
 
     send(g_tx_main, DECK_P_BUTTON, p, sizeof(p));
+}
+
+static void send_activate(unsigned pid)
+{
+    uint8_t p[4] = { pid, pid >> 8, pid >> 16, pid >> 24 };
+
+    send(g_tx_main, DECK_P_APP_ACTIVATE, p, sizeof(p));
 }
 
 static void send_tab_step(int dir)
@@ -245,6 +256,8 @@ static int any_input(const SceCtrlData *pad, unsigned prev)
 #define C_ACCENT UI_RGB(110, 190, 255)
 #define C_WARN   UI_RGB(255, 170, 90)
 
+static unsigned g_drops;  /* frames that missed their vblank: the carousel must keep this at 0 */
+
 static void draw(const deck_view *v, int usb_ok)
 {
     char line[96];
@@ -267,6 +280,11 @@ static void draw(const deck_view *v, int usb_ok)
         x -= 50;
         ui_text(x, 17, 0.6f, C_WARN, 50, "MOUSE");
     }
+    if (g_drops) {
+        snprintf(line, sizeof(line), "drop %u", g_drops);
+        x -= 60;
+        ui_text(x, 17, 0.5f, C_WARN, 60, line);
+    }
     if (g_hello == 1 && v->app[0]) {
         float w = ui_text(8, 17, 0.7f, C_ACCENT, 140, v->app);
         if (v->title[0]) {
@@ -277,8 +295,10 @@ static void draw(const deck_view *v, int usb_ok)
         ui_text(8, 17, 0.7f, C_TEXT, x - 16, "PSP Deck");
     }
 
-    /* center: connection state (the app carousel replaces this in phase 3) */
-    if (!usb_ok)
+    /* center: the app carousel, or the connection state until there is one */
+    if (g_hello == 1 && apps_count() > 0)
+        apps_draw(v->pid);
+    else if (!usb_ok)
         ui_text(24, 130, 0.9f, C_WARN, UI_W - 48, "USB ドライバを開始できませんでした");
     else if (g_hello == 1)
         ui_text(24, 130, 1.0f, C_TEXT, UI_W - 48, v->app[0] ? v->app : "接続しました");
@@ -306,13 +326,14 @@ int main(int argc, char **argv)
     char path[256], *slash;
     SceCtrlData pad;
     deck_view view;
-    unsigned prev = 0, last_input;
+    unsigned prev = 0, last_input, last_frame = 0;
     int mod, start = -1, dimmed = 0;
 
     sceKernelStartThread(sceKernelCreateThread("cb", cb_thread, 0x11, 0x1000, 0, NULL), 0, NULL);
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     g_lock = sceKernelCreateSema("view", 0, 1, 1, NULL);
+    apps_init();
     ui_init();
 
     snprintf(path, sizeof(path), "%s", argv[0]);
@@ -342,14 +363,23 @@ int main(int argc, char **argv)
             deckSetBacklight(0);
             dimmed = 1;
         }
-        if (g_hello == 1)
-            handle_input(&pad, prev);
-        prev = pad.Buttons;
-
         sceKernelWaitSema(g_lock, 1, NULL);
         view = g_view;
         sceKernelSignalSema(g_lock, 1);
+        apps_frame_begin();
+        if (g_hello == 1) {
+            /* In mouse mode CIRCLE is a click, so it does not pick an app. */
+            unsigned go = apps_update(pad.Buttons & ~prev, pad.Buttons, !g_mouse, view.pid);
+            if (go)
+                send_activate(go);
+            handle_input(&pad, prev);
+        }
+        prev = pad.Buttons;
+
         draw(&view, mod >= 0 && start >= 0);  /* waits for vblank */
+        if (last_frame && sceKernelGetSystemTimeLow() - last_frame > 20000)
+            g_drops++;
+        last_frame = sceKernelGetSystemTimeLow();
     }
 
     if (dimmed)

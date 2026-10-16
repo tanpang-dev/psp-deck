@@ -19,4 +19,7 @@ void ui_rect(float x, float y, float w, float h, unsigned int color);
 /* Draws text at (x, baseline y), shortened with "…" to fit max_w. Returns the drawn width. */
 float ui_text(float x, float y, float size, unsigned int color, float max_w, const char *utf8);
 
+/* Same, centered on cx. */
+void ui_text_center(float cx, float y, float size, unsigned int color, float max_w, const char *utf8);
+
 #endif

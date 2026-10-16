@@ -15,6 +15,7 @@ final class Session {
     private let stick: StickDriver
     private let store: ConfigStore
     private let front = FrontWatch()
+    private let apps = AppList()
     private var connected = false
     private var hiSpeed = false
     /// Called on the main thread.
@@ -25,6 +26,7 @@ final class Session {
         self.stick = stick
         self.store = store
         front.onChange = { [weak self] f in self?.sendStatus(f) }
+        apps.onChange = { [weak self] list in self?.sendApps(list) }
         runner.onModeChange = { [weak self] in self?.sendMode() }
         link.onState = { [weak self] state in self?.linkChanged(state) }
         link.onFrame = { [weak self] type, payload in
@@ -35,6 +37,20 @@ final class Session {
     func start() {
         link.start()
         front.start()
+        apps.start()
+    }
+
+    /// One APP frame per app; the PSP swaps its carousel in once the last one has arrived.
+    private func sendApps(_ list: [AppList.Entry]) {
+        guard connected else { return }
+        if list.isEmpty {
+            link.send(Int(DECK_M_APP), [0, 0, 0, 0, 0, 0, 0, 0])
+        }
+        for (i, app) in list.enumerated() {
+            let p = [UInt8(i), UInt8(list.count), 0, 0] + le32(UInt32(bitPattern: app.pid)) + app.rgba
+                + utf8Prefix(app.name, maxBytes: 63) + [0]
+            link.send(Int(DECK_M_APP), p)
+        }
     }
 
     /// Bottom-bar labels for every assignable button; resent whenever the settings change.
@@ -80,6 +96,7 @@ final class Session {
                 connected = true
                 sendMode()
                 sendLabels()
+                apps.scheduleRefresh(after: 0)
                 front.resend()
                 onStatus?(.connected(hiSpeed: hiSpeed))
             } else {
@@ -90,6 +107,8 @@ final class Session {
             runner.button(mask: mask, down: p[4] != 0)
         case Int(DECK_P_TAB_STEP) where p.count >= 1:
             runner.tabStep(Int(Int8(bitPattern: p[0])))
+        case Int(DECK_P_APP_ACTIVATE) where p.count >= 4:
+            AppList.activate(pid: Int32(bitPattern: UInt32(p[0]) | UInt32(p[1]) << 8 | UInt32(p[2]) << 16 | UInt32(p[3]) << 24))
         case Int(DECK_P_STICK) where p.count >= 2:
             stick.update(x: Int(p[0]), y: Int(p[1]))
         default:

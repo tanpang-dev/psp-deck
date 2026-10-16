@@ -1,5 +1,5 @@
 TARGET = pspdeck
-OBJS = main.o ui.o DeckUsb.o
+OBJS = main.o ui.o apps.o DeckUsb.o
 PRXDIR = prx
 
 INCDIR = $(PRXDIR)

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Combine
+import DeckProto
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -116,6 +117,9 @@ func selfTest() {
     assert(utf8Prefix("あいう", maxBytes: 7) == Array("あい".utf8), "must cut on a character boundary")
     assert(pspLabel(for: ButtonBinding(preset: "launchApp", app: "/Applications/Safari.app")) == "Safari")
     assert(presets.allSatisfy { $0.label.utf8.count <= 31 }, "labels must fit the LABELS field")
+    let px = AppList.pixels(of: NSImage(systemSymbolName: "gamecontroller", accessibilityDescription: nil))
+    assert(px.count == AppList.iconSize * AppList.iconSize * 4 && px.contains { $0 != 0 }, "icon must render")
+    assert(8 + px.count + 64 < Int(DECK_MAX_FRAME) - Int(DECK_HDR_SIZE) - 1, "an APP frame must fit in one transfer")
     print("selftest: ok")
 }
 

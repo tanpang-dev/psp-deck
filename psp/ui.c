@@ -107,3 +107,16 @@ float ui_text(float x, float y, float size, unsigned int color, float max_w, con
     }
     return intraFontPrint(ui_font, x, y, buf) - x;
 }
+
+void ui_text_center(float cx, float y, float size, unsigned int color, float max_w, const char *utf8)
+{
+    float w;
+
+    if (!ui_font)
+        return;
+    intraFontSetStyle(ui_font, size, color, 0, 0, 0);
+    w = intraFontMeasureText(ui_font, utf8);
+    if (w > max_w)
+        w = max_w;
+    ui_text(cx - w / 2, y, size, color, max_w, utf8);
+}
