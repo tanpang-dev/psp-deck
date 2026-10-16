@@ -21,7 +21,6 @@ PSP-3000 を USB で Mac につなぎ、PSP の画面とボタンで Mac を操�
 | Mac 側の USB | libusb（SwiftPM の systemLibrary）で IF0 だけを claim する | ベンダー固有のインターフェースはどのドライバも掴まない。オーディオのインターフェースは macOS 標準のドライバに任せる |
 | 現在のタブ名 | **前面ウィンドウのタイトル**（Accessibility API の `kAXFocusedWindow` → `kAXTitle`） | Chrome・Safari・Finder・VS Code のどれでも、アクティブなタブの名前になる。AppleScript もアプリごとの分岐も要らない |
 | タブの前後移動 | 既定は `ctrl+tab` / `ctrl+shift+tab`、アプリごとに上書きできる（VS Code は `cmd+opt+right/left`） | `cmd+shift+]` は記号キーで、JIS 配列だと別の文字になる（§5.3） |
-| Chrome のタブ一覧 | AppleScript（`NSAppleScript`） | タブ一覧とジャンプはウィンドウタイトルからは取れない |
 | 日本語表示 | intraFont で `flash0:/font/jpn0.pgf` を読み、UTF-8 で描く | PSP 本体のフォントなので配布物に含めずに済む。jpn0.pgf はどの地域の本体にも入っている |
 | ボタン割り当て | **設定画面でプリセットから選ぶ**。「カスタム」を選んだボタンだけ JSON の定義を使う | §5.2 |
 | アプリ一覧の見せ方 | **疑似 3D のカルーセル**。十字キーの左右で回し、○ で前面に出す | 2D のスプライトを楕円上に並べ、奥行きに応じて大きさと透明度を変えて、奥から順に描く。GU の 3D 行列は使わないので軽く、コードも短い（§4.5） |
@@ -37,7 +36,7 @@ PSP-3000 を USB で Mac につなぎ、PSP の画面とボタンで Mac を操�
 │        │ syscall                   │◄─────────►│  Actions    : CGEvent / open / shell   │
 │ deck.prx (kernel)                  │           │  FrontWatch : 前面アプリとタイトル(AX) │
 │  sceUsbbd（複合記述子）            │           │  AppList    : NSWorkspace＋アイコン    │
-│  mic thread: sceAudioInput         │  IF2 iso  │  Chrome     : AppleScript (P4)         │
+│  mic thread: sceAudioInput         │  IF2 iso  │                                        │
 │    → iso IN（alt1 の間だけ動く）   │──────────►│  Settings   : SwiftUI の設定画面       │
 └────────────────────────────────────┘           │ macOS 標準 USB Audio → 入力「PSP」     │
                                                  └────────────────────────────────────────┘
@@ -67,7 +66,7 @@ psp-deck/
 │   ├── Package.swift
 │   ├── Sources/CLibUSB/    # module.modulemap（pkg-config libusb-1.0）
 │   ├── Sources/DeckProto/  # proto/deck_proto.h を Swift から import するための C ターゲット
-│   ├── Sources/PSPDeck/    # main, USBLink, Session, Actions, Presets, Settings(View), FrontWatch, AppList, Chrome
+│   ├── Sources/PSPDeck/    # main, USBLink, Session, Actions, Presets, Settings(View), FrontWatch, AppList
 │   ├── build-app.sh        # .app にまとめ、Info.plist を入れて codesign する
 │   └── tools/usbecho.c     # S1 用のエコー・速度測定ツール
 └── spike/usb-echo/        # S1 用の EBOOT。受けたフレームをそのまま返し、診断情報を表示する。
@@ -125,7 +124,7 @@ int deckSetBacklight(int on);                          // 無操作のとき画�
 ### 4.3 EBOOT（ユーザー）
 
 - 起動時に `sceKernelLoadModule("deck.prx")`、`sceKernelStartModule`、`deckUsbStart()` を順に呼ぶ。終了時は逆の順で止める
-- **受信スレッド**: `deckUsbRead` でフレームを受け取り、`link.c` の状態（接続、前面アプリ、タイトル、アプリ一覧、タブ一覧、割り当てのラベル）を更新する。メインスレッドとの排他はミューテックス 1 つで行う
+- **受信スレッド**: `deckUsbRead` でフレームを受け取り、`link.c` の状態（接続、前面アプリ、タイトル、アプリ一覧、割り当てのラベル）を更新する。メインスレッドとの排他はミューテックス 1 つで行う
 - **メインループ**: `sceCtrlReadBufferPositive` で入力を読み、§4.4 の規則に従って送信する。描画は P1 では `pspDebugScreen`（ASCII のみ）、P2 以降は GU と intraFont
 
 ### 4.4 ボタンの扱い
@@ -135,9 +134,7 @@ PSP 側で意味を解釈するのは UI に関わるボタンだけで、それ
 | ボタン | 画面 | PSP の動作 |
 |---|---|---|
 | L / R | 全画面 | **離したとき**に `TAB_STEP(-1/+1)` を送る。押している間にもう片方が押されたら同時押しとして扱い、単独の動作は出さない |
-| L+R 同時押し | ホーム | `TABLIST_REQ` を送り、タブ一覧の画面を開く |
 | 十字キー左右 / ○ | ホーム（P3〜） | カルーセルを回し、○ で `APP_ACTIVATE(pid)` |
-| 十字キー / ○ / × | タブ一覧 | 上下で選び、○ で `TAB_SELECT`、× で閉じる |
 | △ □ × START SELECT | ホーム | `BUTTON(mask, down/up)` を送る |
 | ○ / × | マウスモード中 | `BUTTON` を送る（Mac 側で左クリック、右クリックにする） |
 | アナログスティック | 全画面 | 生の値（0〜255）が前回送った値と変わったときに `STICK` を送る（最大 60Hz） |
@@ -172,7 +169,7 @@ L/R を離したときに発火させるのは、同時押しと区別するの�
 
 **アイコン**は 96×96 で受け取り、128×128 のテクスチャの左上に置いて、UV 0〜96 で描く（GU のテクスチャは 2 のべき乗の大きさにする必要があるため）。
 
-タブ一覧は全画面のリストにする（1 行 16px で約 15 行、スクロールできる）。jpn0.pgf に無い文字（絵文字など）は表示されないが、それは許容する。
+jpn0.pgf に無い文字（絵文字など）は表示されないが、それは許容する。
 
 ## 5. Mac 側
 
@@ -184,7 +181,6 @@ L/R を離したときに発火させるのは、同時押しと区別するの�
 - **AppList**: `NSWorkspace.runningApplications` のうち `.regular` のものを対象にする。起動と終了の通知を受けたら一覧をまるごと送り直す。アイコンは 96×96 の RGBA8888（premultiplied）で、GU の `GU_PSM_8888` と同じバイト順。1 個 36KB、20 個で約 740KB（hi-speed なら 0.1 秒程度、full-speed でも 1 秒以内の見込み。S1-d で確かめる）
 - **Stick**: 60Hz のタイマーで、最後に受け取った STICK の値を処理する。中心からの距離がデッドゾーン未満なら何もしない。それを超えた分を、通常はピクセル単位のスクロール（`CGEvent` の scrollWheel）、マウスモードではカーソル移動（現在位置に足して `mouseMoved`。ボタンを押している間は `leftMouseDragged`）に変換する。速度は 2 乗のカーブで加速させる
 - **自動起動**: 設定画面のチェックボックスで `SMAppService.mainApp.register()` / `unregister()` を呼ぶ。`build-app.sh install` で `~/Applications` に置く
-- **Chrome**（P4）: 1 本の AppleScript で、全ウィンドウの `id`、各タブの `title`、`active tab index` を取る。ジャンプするときは、`set active tab index of window id W to I` → そのウィンドウを `index 1` に → activate の順に実行する
 
 ### 5.1 アクション
 
@@ -256,7 +252,6 @@ CGEvent に渡すキーコードは物理的なキーの位置を表すので、
 | 権限 | 用途 | 必要になる時期 |
 |---|---|---|
 | アクセシビリティ | CGEvent の送信、ウィンドウタイトルの取得 | P1 |
-| オートメーション（Google Chrome） | タブ一覧とジャンプ | P4 |
 | マイク（録音アプリ側） | 録音アプリが「PSP」の入力を使う | P5 |
 
 ## 6. 通信プロトコル v1（IF0）
@@ -286,18 +281,14 @@ off  size  field
 | 0x01 | PSP→Mac | HELLO | `u16 version, u16 usb_speed(1=full,2=hi)` |
 | 0x82 | Mac→PSP | STATUS | `u32 front_pid`, `app_name\0`, `title\0` |
 | 0x83 | Mac→PSP | APP | `u8 index, u8 count, u8 active, u8 0`, `u32 pid`, `u8 rgba[96*96*4]`, `name\0` |
-| 0x84 | Mac→PSP | TABS | `u16 count, u16 0`、続いて count 個の `{u32 window_id, u16 tab_index(1起点), u8 active, u8 title_len, title[title_len]}` |
 | 0x85 | Mac→PSP | LABELS | `u8 count, u8[3] 0`、続いて count 個の `{u32 mask, label\0}`。ラベルは短い表示名（PSP 側で幅に収まらなければ省略） |
 | 0x86 | Mac→PSP | MODE | `u8 mouse_mode, u8 mic_muted, u8[2] 0` |
 | 0x07 | PSP→Mac | STICK | `u8 x, u8 y, u8[2] 0`（生の値。中心は約 128） |
 | 0x02 | PSP→Mac | BUTTON | `u32 mask（PSP_CTRL_* のうち 1 ビット）, u8 down, u8[3] 0` |
 | 0x03 | PSP→Mac | TAB_STEP | `i8 dir(+1/-1), u8[3] 0` |
 | 0x04 | PSP→Mac | APP_ACTIVATE | `u32 pid` |
-| 0x05 | PSP→Mac | TABLIST_REQ | なし |
-| 0x06 | PSP→Mac | TAB_SELECT | `u32 window_id, u16 tab_index, u16 0` |
 
 - APP は 1 個ずつ別のフレームで送る。PSP は `index==0` を受け取ったら一覧を作り直す。`count==0` は一覧が空であることを表す
-- TABS のタイトルは 255 バイトまでに切り詰める（UTF-8 の文字の途中では切らない）。フレームに入りきらない分のタブは送らない。Chrome が起動していなければ `count==0` を返す
 - 音声は IF2（UAC）で送るので、このプロトコルには入れない
 - アプリのバンドル ID は PSP では使わないので、送らない
 
@@ -374,6 +365,8 @@ intraFont で jpn0.pgf を開き、`INTRAFONT_STRING_UTF8` で「漢字かなカ
 
 採用しなかったもの: シフト層、アプリごとの割り当て、Chrome 以外のアプリでの L+R 一覧。
 
+**取りやめたもの（2026-10-17）**: L+R による Chrome のタブ一覧（当初の機能要件 4）。実装したが、ユーザー判断で不要になり削除した。L と R の同時押しは、どちらのタブ移動も送らないだけになっている。
+
 ## 9. ビルド手順
 
 ### 9.1 pspdev（Mac）
@@ -414,9 +407,9 @@ open build/PSPDeck.app    # 初回はアクセシビリティの許可を求め�
 |---|---|---|
 | 0 ✅ | S1-a〜g | §7 の S1 の表をすべて満たす（S1-f が駄目なら相談） |
 | 1 ✅ | 接続、HELLO、BUTTON、STICK、MODE、TAB_STEP、Actions、設定画面（プリセット、記録、カスタム、スティック、自動起動）、充電。USB の構成はバルクのみ（マイクを見せると macOS が無音の入力デバイスを既定にしてしまうため、P5 で有効化） | 設定画面で選んだ割り当てが PSP のボタンで実行され、スティックでスクロールとマウス操作ができる。ケーブルの抜き差しや Mac アプリの再起動のあとも自動で復帰する。接続中に充電される |
-| 2 | GU と intraFont、STATUS、TAB_STEP、LABELS、画面の減光 | 上部バーに日本語のタイトルが、下部に割り当てのラベルが出る。Chrome、Safari、Finder、VS Code で L/R によってタブが移る。60 秒操作しないと画面が暗くなる |
-| 3 | APP 一覧（カルーセル）と APP_ACTIVATE | カルーセルが左右で滑らかに回り（20 個を押しっぱなしで回し続けてもフレーム落ちが 0）、○ でそのアプリが前面に来る。アプリの起動と終了が反映される |
-| 4 | TABS、TAB_SELECT | L+R で Chrome の全ウィンドウのタブが一覧され、○ でジャンプする |
+| 2 ✅ | GU と intraFont、STATUS、TAB_STEP、LABELS、画面の減光 | 上部バーに日本語のタイトルが、下部に割り当てのラベルが出る。Chrome、Safari、Finder、VS Code で L/R によってタブが移る。60 秒操作しないと画面が暗くなる |
+| 3 ✅ | APP 一覧（カルーセル）と APP_ACTIVATE | カルーセルが左右で滑らかに回り（20 個を押しっぱなしで回し続けてもフレーム落ちが 0）、○ でそのアプリが前面に来る。アプリの起動と終了が反映される |
+| 4 | （取りやめ） | Chrome のタブ一覧は不要になった。代わりに、カルーセルは止まってから 0.25 秒で自動的にアプリを切り替える |
 | 5 | マイク（M1 → M2）、ミュート | Mac の入力デバイス「PSP」で PSP の内蔵マイクの声が録れ、ミュートが効く |
 
 テストとして置くのは、`proto/test_proto.c`（フレームとパディング）と、キー文字列の解析・プリセット表の自己チェックだけ。USB と UI は実機で確認する。

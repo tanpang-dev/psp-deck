@@ -20,7 +20,6 @@ final class Session {
     private var hiSpeed = false
     /// Called on the main thread.
     var onStatus: ((Status) -> Void)?
-    var onError: ((String) -> Void)?
 
     init(runner: ActionRunner, stick: StickDriver, store: ConfigStore) {
         self.runner = runner
@@ -62,30 +61,6 @@ final class Session {
             p += le32(b.mask) + utf8Prefix(pspLabel(for: store.config.buttons[b.rawValue]), maxBytes: 31) + [0]
         }
         link.send(Int(DECK_M_LABELS), p)
-    }
-
-    /// Chrome's tabs for the PSP's L+R list; as many as fit in one frame (count 0 = Chrome not running).
-    private func sendTabs() {
-        var tabs: [Chrome.Tab] = []
-        do {
-            tabs = try Chrome.tabs()
-        } catch {
-            onError?("Chrome のタブを取得できません（オートメーションの許可を確認してください）: \(error.localizedDescription)")
-        }
-        var body: [UInt8] = []
-        var count = 0
-        let limit = Int(DECK_MAX_FRAME) - Int(DECK_HDR_SIZE) - 1 - 4
-        for t in tabs {
-            let title = utf8Prefix(t.title.replacingOccurrences(of: "\n", with: " "), maxBytes: 255)
-            let entry = le32(t.windowID) + [UInt8(t.index & 0xFF), UInt8(t.index >> 8), t.active ? 1 : 0,
-                                            UInt8(title.count)] + title
-            if body.count + entry.count > limit || count == 0xFFFF {
-                break
-            }
-            body += entry
-            count += 1
-        }
-        link.send(Int(DECK_M_TABS), [UInt8(count & 0xFF), UInt8(count >> 8), 0, 0] + body)
     }
 
     private func sendStatus(_ f: FrontWatch.Front) {
@@ -134,15 +109,6 @@ final class Session {
             runner.tabStep(Int(Int8(bitPattern: p[0])))
         case Int(DECK_P_APP_ACTIVATE) where p.count >= 4:
             AppList.activate(pid: Int32(bitPattern: UInt32(p[0]) | UInt32(p[1]) << 8 | UInt32(p[2]) << 16 | UInt32(p[3]) << 24))
-        case Int(DECK_P_TABLIST_REQ):
-            sendTabs()
-        case Int(DECK_P_TAB_SELECT) where p.count >= 6:
-            let wid = UInt32(p[0]) | UInt32(p[1]) << 8 | UInt32(p[2]) << 16 | UInt32(p[3]) << 24
-            do {
-                try Chrome.select(windowID: wid, index: UInt16(p[4]) | UInt16(p[5]) << 8)
-            } catch {
-                onError?("Chrome のタブを切り替えられません: \(error.localizedDescription)")
-            }
         case Int(DECK_P_STICK) where p.count >= 2:
             stick.update(x: Int(p[0]), y: Int(p[1]))
         default:

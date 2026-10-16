@@ -18,14 +18,11 @@ enum {
     DECK_P_BUTTON       = 0x02,
     DECK_P_TAB_STEP     = 0x03,
     DECK_P_APP_ACTIVATE = 0x04,
-    DECK_P_TABLIST_REQ  = 0x05,
-    DECK_P_TAB_SELECT   = 0x06,
     DECK_P_STICK        = 0x07,
 
     DECK_M_HELLO        = 0x81,
     DECK_M_STATUS       = 0x82,
     DECK_M_APP          = 0x83,
-    DECK_M_TABS         = 0x84,
     DECK_M_LABELS       = 0x85,
     DECK_M_MODE         = 0x86,
 };
