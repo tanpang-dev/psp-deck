@@ -97,11 +97,13 @@ struct UsbbdDeviceRequest {
     void *physicalAddress;
 };
 
+#ifndef DECK_HOST_TEST  /* host builds (desc_check) have 64-bit pointers */
 _Static_assert(sizeof(struct DeviceDescriptor) == 20, "abi");
 _Static_assert(sizeof(struct EndpointDescriptor) == 16, "abi");
 _Static_assert(sizeof(struct InterfaceDescriptor) == 24, "abi");
 _Static_assert(sizeof(struct ConfigDescriptor) == 24, "abi");
 _Static_assert(sizeof(struct StringDescriptor) == 64, "abi");
+#endif
 
 int sceUsbbdRegister(struct UsbDriver *drv);
 int sceUsbbdUnregister(struct UsbDriver *drv);
@@ -110,6 +112,7 @@ int sceUsbbdReqRecv(struct UsbbdDeviceRequest *req);
 int sceUsbbdReqCancel(struct UsbbdDeviceRequest *req);
 int sceUsbbdReqCancelAll(struct UsbEndpoint *endp);
 int sceUsbbdClearFIFO(struct UsbEndpoint *endp);
+int sceUsbbdStall(struct UsbEndpoint *endp);
 
 int sceUsbStart(const char *name, int size, void *args);
 int sceUsbStop(const char *name, int size, void *args);

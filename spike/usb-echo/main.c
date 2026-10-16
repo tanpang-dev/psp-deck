@@ -23,8 +23,7 @@ static int g_iso_mode = DECK_ISO_SINGLE;
 
 /* Same order as deck_variants in psp/prx/descriptors.c */
 static const char *const g_layouts[] = {
-    "UAC1 iso, hs 1ms", "UAC1 iso, hs 125us", "vendor iso, hs 1ms (diag)",
-    "vendor iso, hs 125us (diag)", "bulk only",
+    "UAC2 mic, hs 125us", "vendor iso, hs 125us (diag)", "bulk only",
 };
 #define NLAYOUTS ((int)(sizeof(g_layouts) / sizeof(g_layouts[0])))
 
@@ -121,7 +120,8 @@ static void show(const char *prx, int mod, int start)
         else
             printf("                                   \n");
     }
-    printf("control requests: %d\n", in.nreq);
+    printf("control requests: %d  (UAC2 clock answered %d, iso behind %d)\n", in.nreq, in.uac_answered,
+           in.iso_behind);
     for (i = 0; i < 3 && i < in.nreq; i++) {
         unsigned char *r = in.req_log[(in.nreq - 1 - i) & 7];
         printf("  %02X %02X %02X%02X %02X%02X %02X%02X\n", r[0], r[1], r[3], r[2], r[5], r[4], r[7], r[6]);

@@ -16,7 +16,7 @@ typedef struct {
     int ret_charge_syscon, ret_charge_power;
     int variant;               /* index into the PRX's descriptor layouts (see descriptors.c) */
     int variant_ret[8];        /* sceUsbStart result per layout tried */
-    int ep3_num, iso_timeouts, iso_nlog;
+    int ep3_num, iso_timeouts, iso_nlog, uac_answered, iso_behind;
     int iso_log[8][3];         /* last completions: returnCode, transmitted, microseconds */
     int nreq;                  /* control requests seen; last 8 kept raw in req_log */
     unsigned char req_log[8][8];

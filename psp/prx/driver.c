@@ -48,10 +48,56 @@ static void set_mic(int alt)
     sceKernelSetEventFlag(g_ev, alt ? EV_MIC_ON : EV_MIC_OFF);
 }
 
+/* EP0 data stage for class GET requests (cf. psp-uvc usb_ep0_req_send). */
+static struct UsbbdDeviceRequest g_ep0_req;
+static unsigned char g_ep0_buf[64] __attribute__((aligned(64)));
+
+static void ep0_send(const void *data, int len, int wlength)
+{
+    if (len > wlength)
+        len = wlength;
+    memcpy(g_ep0_buf, data, len);
+    sceKernelDcacheWritebackRange(g_ep0_buf, sizeof(g_ep0_buf));
+    memset(&g_ep0_req, 0, sizeof(g_ep0_req));
+    g_ep0_req.endpoint = &g_ep[0];
+    g_ep0_req.data = g_ep0_buf;
+    g_ep0_req.size = len;
+    sceUsbbdReqSend(&g_ep0_req);
+}
+
+/* UAC2 clock source: sampling frequency (CUR/RANGE) and validity, all fixed. */
+static int uac2_clock_request(const struct DeviceRequest *req)
+{
+    static const unsigned char cur[4] = { MIC_RATE & 0xFF, (MIC_RATE >> 8) & 0xFF, MIC_RATE >> 16, 0 };
+    static const unsigned char range[14] = {
+        1, 0,
+        MIC_RATE & 0xFF, (MIC_RATE >> 8) & 0xFF, MIC_RATE >> 16, 0,
+        MIC_RATE & 0xFF, (MIC_RATE >> 8) & 0xFF, MIC_RATE >> 16, 0,
+        0, 0, 0, 0,
+    };
+    static const unsigned char valid = 1;
+    int cs = req->wValue >> 8;
+
+    if (req->bmRequestType != 0xA1 || req->wIndex != ((UAC2_CLOCK_ID << 8) | 1))
+        return 0;
+    if (cs == 1 && req->bRequest == 0x01)
+        ep0_send(cur, sizeof(cur), req->wLength);
+    else if (cs == 1 && req->bRequest == 0x02)
+        ep0_send(range, sizeof(range), req->wLength);
+    else if (cs == 2 && req->bRequest == 0x01)
+        ep0_send(&valid, 1, req->wLength);
+    else
+        return 0;
+    g_info.uac_answered++;
+    return 1;
+}
+
 static int process_request(int recipient, int arg, struct DeviceRequest *req)
 {
     memcpy(g_info.req_log[g_info.nreq & 7], req, 8);
     g_info.nreq++;
+    if (deck_variants[g_info.variant].kind == DECK_KIND_UAC)
+        uac2_clock_request(req);
     /* macOS may switch alt settings via a plain SET_INTERFACE seen here (cf. psp-uvc). */
     if (req->bmRequestType == 0x01 && req->bRequest == 0x0B && req->wIndex == g_mic_if)
         set_mic(req->wValue);
@@ -102,8 +148,11 @@ static const short g_tone[50] = {
 static struct UsbbdDeviceRequest g_iso_req[2];
 static short g_iso_buf[2][64] __attribute__((aligned(64)));
 _Static_assert(sizeof(g_iso_buf[0]) >= MIC_MAX_PACKET, "iso buffer smaller than one packet");
-static int g_tone_pos, g_rate_acc, g_iso_busy[2], g_iso_mode = DECK_ISO_SINGLE, g_first_layout, g_iso_per_sec = 1000;
+static int g_tone_pos, g_iso_busy[2], g_iso_mode = DECK_ISO_SINGLE, g_first_layout, g_iso_per_sec = 1000;
 static u32 g_iso_t0[2];
+/* Samples come due by wall clock, so a missed microframe is made up in the next packets. */
+static u32 g_due_last, g_due_rem;
+static int g_owed;
 
 static void on_iso0(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO0); }
 static void on_iso1(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO1); }
@@ -123,9 +172,23 @@ static void iso_queue(int i)
 
     if (i == 1 && (g_iso_mode & DECK_ISO_SINGLE))
         return;
-    g_rate_acc += MIC_RATE;
-    n = g_rate_acc / g_iso_per_sec;
-    g_rate_acc %= g_iso_per_sec;
+    {
+        u32 now = sceKernelGetSystemTimeLow(), dt = now - g_due_last;
+        int max = deck_iso_packet(g_iso_per_sec) / 2;
+
+        g_due_last = now;
+        if (dt > 50000)
+            dt = 50000;
+        g_due_rem += dt * MIC_RATE;
+        g_owed += g_due_rem / 1000000;
+        g_due_rem %= 1000000;
+        if (g_owed > MIC_RATE / 100)        /* never more than 10 ms behind */
+            g_owed = MIC_RATE / 100;
+        n = g_owed < max ? g_owed : max;
+        if (g_owed > max)
+            g_info.iso_behind++;
+        g_owed -= n;
+    }
     if (g_iso_mode & DECK_ISO_FIXED)
         n = deck_iso_packet(g_iso_per_sec) / 2;
     for (k = 0; k < n; k++) {
@@ -169,7 +232,10 @@ static int mic_thread(SceSize args, void *argp)
             return 0;
         sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1 | EV_MIC_OFF));
         g_info.ep3_num = g_ep[3].endpointNumber;
-        g_iso_per_sec = g_info.speed == 2 && deck_variants[g_info.variant].hs_interval == 1 ? 8000 : 1000;
+        g_iso_per_sec = g_info.speed == 2 ? 8000 : 1000;
+        g_due_last = sceKernelGetSystemTimeLow();
+        g_due_rem = 0;
+        g_owed = 0;
         iso_restart();
         for (;;) {
             SceUInt to = 20000;

@@ -13,3 +13,7 @@ include $(PSPSDK)/lib/build_prx.mak
 
 DeckUsb.S: exports.exp
 	psp-build-exports -s $<
+
+# Host preflight of the descriptor layouts (run before trying a new layout on real hardware)
+check:
+	cc -Wall -DDECK_HOST_TEST desc_check.c descriptors.c -o /tmp/deck_desc_check && /tmp/deck_desc_check
