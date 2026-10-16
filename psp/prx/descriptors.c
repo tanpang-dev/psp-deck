@@ -38,10 +38,11 @@ struct UsbConfiguration deck_config_full = { &g_full.conf, g_full.set, g_full.if
 struct DeviceDescriptor deck_dev_hi   = { 18, 1, 0x200, 0, 0, 0, 64, 0, 0, 0x100, 0, 0, 0, 1 };
 struct DeviceDescriptor deck_dev_full = { 18, 1, 0x200, 0, 0, 0, 64, 0, 0, 0x100, 0, 0, 0, 1 };
 
-/* Bytes in one iso packet: the nominal sample count rounded up, plus one sample of headroom. */
+/* Bytes in one iso packet: the nominal sample count rounded up plus headroom, so packets that
+ * follow a missed microframe can carry the backlog (requests take 200-400 us to come back). */
 int deck_iso_packet(int per_second)
 {
-    return ((MIC_RATE + per_second - 1) / per_second + 1) * 2;
+    return ((MIC_RATE + per_second - 1) / per_second + MIC_HEADROOM) * 2;
 }
 
 void deck_desc_build(struct deck_speed_set *s, struct DeviceDescriptor *dev, const struct deck_variant *v, int hs)

@@ -52,8 +52,16 @@ static void set_mic(int alt)
 static struct UsbbdDeviceRequest g_ep0_req;
 static unsigned char g_ep0_buf[64] __attribute__((aligned(64)));
 
+static int g_ep0_queued;
+
+static void on_ep0(struct UsbbdDeviceRequest *req) { g_info.ep0_done++; }
+
+/* A new SETUP means the host has finished with the previous control transfer, but if our earlier
+ * answer never went out it is still on the bus driver's EP0 queue; pull it off before reusing it. */
 static void ep0_send(const void *data, int len, int wlength)
 {
+    if (g_ep0_queued)
+        sceUsbbdReqCancel(&g_ep0_req);
     if (len > wlength)
         len = wlength;
     memcpy(g_ep0_buf, data, len);
@@ -62,7 +70,10 @@ static void ep0_send(const void *data, int len, int wlength)
     g_ep0_req.endpoint = &g_ep[0];
     g_ep0_req.data = g_ep0_buf;
     g_ep0_req.size = len;
-    sceUsbbdReqSend(&g_ep0_req);
+    g_ep0_req.onComplete = on_ep0;
+    g_info.ep0_ret = sceUsbbdReqSend(&g_ep0_req);
+    g_ep0_queued = g_info.ep0_ret >= 0;
+    g_info.ep0_sent++;
 }
 
 /* UAC2 clock source: sampling frequency (CUR/RANGE) and validity, all fixed. */
@@ -170,7 +181,7 @@ static void iso_queue(int i)
 {
     int n, k, ret;
 
-    if (i == 1 && (g_iso_mode & DECK_ISO_SINGLE))
+    if ((i == 1 && (g_iso_mode & DECK_ISO_SINGLE)) || g_iso_busy[i])
         return;
     {
         u32 now = sceKernelGetSystemTimeLow(), dt = now - g_due_last;
@@ -184,7 +195,7 @@ static void iso_queue(int i)
         g_due_rem %= 1000000;
         if (g_owed > MIC_RATE / 100)        /* never more than 10 ms behind */
             g_owed = MIC_RATE / 100;
-        n = g_owed < max ? g_owed : max;
+        n = g_owed < 1 ? 1 : g_owed < max ? g_owed : max;
         if (g_owed > max)
             g_info.iso_behind++;
         g_owed -= n;
@@ -212,12 +223,17 @@ static void iso_queue(int i)
 }
 
 /* Drops whatever is in flight and starts over; used when a request never completes. */
-static void iso_restart(void)
+/* Cancelled requests get no onComplete from the bus driver; CancelAll hands them back synchronously.
+ * Only called when the host leaves alt 1 (or on exit), never in a loop. */
+static void iso_stop(void)
 {
     sceUsbbdReqCancelAll(&g_ep[3]);
-    sceKernelDelayThread(5000);
-    sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1));
     g_iso_busy[0] = g_iso_busy[1] = 0;
+    sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1));
+}
+
+static void iso_start(void)
+{
     iso_queue(0);
     iso_queue(1);
 }
@@ -236,18 +252,17 @@ static int mic_thread(SceSize args, void *argp)
         g_due_last = sceKernelGetSystemTimeLow();
         g_due_rem = 0;
         g_owed = 0;
-        iso_restart();
+        iso_start();
         for (;;) {
             SceUInt to = 20000;
             if (sceKernelWaitEventFlag(g_ev, EV_ISO0 | EV_ISO1 | EV_MIC_OFF | EV_QUIT,
                                        PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &bits, &to) < 0) {
+                /* The host is not polling right now; leave the request queued until it does. */
                 g_info.iso_timeouts++;
-                iso_restart();
                 continue;
             }
             if (bits & (EV_MIC_OFF | EV_QUIT)) {
-                sceUsbbdReqCancelAll(&g_ep[3]);
-                g_iso_busy[0] = g_iso_busy[1] = 0;
+                iso_stop();
                 if (bits & EV_QUIT)
                     return 0;
                 break;

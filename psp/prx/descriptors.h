@@ -5,7 +5,8 @@
 #include "usbbd.h"
 
 #define MIC_RATE       44100
-#define MIC_MAX_PACKET (((MIC_RATE + 999) / 1000 + 1) * 2)  /* full-speed packet, the largest */
+#define MIC_HEADROOM   4   /* extra samples a packet may carry to catch up */
+#define MIC_MAX_PACKET (((MIC_RATE + 999) / 1000 + MIC_HEADROOM) * 2)  /* full-speed packet, the largest */
 #define UAC2_CLOCK_ID  0x10
 
 enum { DECK_KIND_UAC, DECK_KIND_VENDOR, DECK_KIND_NONE };

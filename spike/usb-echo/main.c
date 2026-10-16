@@ -120,8 +120,8 @@ static void show(const char *prx, int mod, int start)
         else
             printf("                                   \n");
     }
-    printf("control requests: %d  (UAC2 clock answered %d, iso behind %d)\n", in.nreq, in.uac_answered,
-           in.iso_behind);
+    printf("ctrl %d  clock %d  ep0 sent %d done %d ret %08X  behind %d\n", in.nreq, in.uac_answered,
+           in.ep0_sent, in.ep0_done, in.ep0_ret, in.iso_behind);
     for (i = 0; i < 3 && i < in.nreq; i++) {
         unsigned char *r = in.req_log[(in.nreq - 1 - i) & 7];
         printf("  %02X %02X %02X%02X %02X%02X %02X%02X\n", r[0], r[1], r[3], r[2], r[5], r[4], r[7], r[6]);
