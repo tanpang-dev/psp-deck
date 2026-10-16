@@ -16,8 +16,8 @@ PSP-3000 を USB で Mac につなぎ、PSP の画面とボタンで Mac を操�
 | 論点 | 決定 | 理由 |
 |---|---|---|
 | PSP 側の構成 | **カーネル PRX（USB ドライバ）＋ユーザー EBOOT（UI）** | `sceUsbbdRegister` は `sceUsbBus_driver`（カーネル専用ライブラリ）にある。6.xx では EBOOT をカーネルモードで動かせないので、PRX を分け、syscall エクスポート（属性 0x4001）で EBOOT から呼べるようにする。PSPLink の usbhostfs と同じ構造 |
-| USB デバイス | VID `0x054C` / PID `0x01CA` の**複合デバイス**。IF0 はベンダー固有（bulk IN/OUT）で制御用、IF1/IF2 は USB Audio Class 1.0 のマイク | 制御とマイクを 1 本のケーブルで同時に使える。PID は PSPLink（0x01C9）とぶつからない値にする |
-| マイク | **案 A: PSP を UAC1 のマイクとして見せる**（iso IN）。macOS の標準入力デバイスとしてそのまま使える | Mac 側はコード不要で、仮想オーディオデバイスも要らない。未知なのは iso 転送だけなので、フェーズ 0 で先に検証する（§7 S1-f） |
+| USB デバイス | VID `0x054C` / PID `0x01CA` の**複合デバイス**。IF0 はベンダー固有（bulk IN/OUT）で制御用、IF1/IF2 は USB Audio Class 2.0 のマイク | 制御とマイクを 1 本のケーブルで同時に使える。PID は PSPLink（0x01C9）とぶつからない値にする |
+| マイク | **案 A: PSP を UAC2 のマイクとして見せる**（hi-speed、125μs ごとの iso IN）。macOS の標準入力デバイスとしてそのまま使える | Mac 側はコード不要で、仮想オーディオデバイスも要らない。UAC1 では成り立たないことをフェーズ 0 で確かめた（§7 の結果） |
 | Mac 側の USB | libusb（SwiftPM の systemLibrary）で IF0 だけを claim する | ベンダー固有のインターフェースはどのドライバも掴まない。オーディオのインターフェースは macOS 標準のドライバに任せる |
 | 現在のタブ名 | **前面ウィンドウのタイトル**（Accessibility API の `kAXFocusedWindow` → `kAXTitle`） | Chrome・Safari・Finder・VS Code のどれでも、アクティブなタブの名前になる。AppleScript もアプリごとの分岐も要らない |
 | タブの前後移動 | 既定は `ctrl+tab` / `ctrl+shift+tab`、アプリごとに上書きできる（VS Code は `cmd+opt+right/left`） | `cmd+shift+]` は記号キーで、JIS 配列だと別の文字になる（§5.3） |
@@ -71,7 +71,7 @@ psp-deck/
 │   ├── build-app.sh        # .app にまとめ、Info.plist を入れて codesign する
 │   └── tools/usbecho.c     # S1 用のエコー・速度測定ツール
 └── spike/usb-echo/        # S1 用の EBOOT。受けたフレームをそのまま返し、診断情報を表示する。
-                            # deck.prx（UAC あり、試験音を出す）と deck_nouac.prx（IF0 のみ）を同梱し、× を押しながら起動すると後者を使う
+                            # 起動時のメニューで USB の構成（UAC2 / ベンダー iso の診断 / バルクのみ）を選ぶ
 ```
 
 ## 4. PSP 側
@@ -81,14 +81,17 @@ psp-deck/
 | IF | クラス | alt | エンドポイント |
 |---|---|---|---|
 | 0 | 0xFF ベンダー固有 | 0 | 0x81 bulk IN、0x02 bulk OUT（HS は 512B、FS は 64B） |
-| 1 | 0x01/0x01 AudioControl | 0 | なし。Header（bInCollection=1, IF2）、Input Terminal（ID1, 0x0201 Microphone, 1ch）、Output Terminal（ID2, 0x0101 USB Streaming, source=1） |
-| 2 | 0x01/0x02 AudioStreaming | 0 | なし（帯域なし） |
-| 2 | 同上 | 1 | 0x83 iso IN async（bmAttributes 0x05）、bInterval は FS で 1、HS で 4（どちらも 1ms）。AS General（PCM）、Type I Format（1ch、16bit、固定のレート 1 つ） |
+| — | IAD（IF1〜IF2 をまとめる。IF0 の bulk OUT の extra に載せて IF1 の直前に出す） | — | — |
+| 1 | 0x01/0x01/0x20 AudioControl v2 | 0 | なし。Header v2（マイク）、Clock Source（ID 0x10、内部固定、周波数は読み取りのみ）、Input Terminal（0x0201 Microphone、1ch）、Output Terminal（0x0101 USB Streaming） |
+| 2 | 0x01/0x02/0x20 AudioStreaming v2 | 0 | なし（帯域なし） |
+| 2 | 同上 | 1 | 0x83 iso IN async、**bInterval 1**（HS は 125μs、FS は 1ms）、wMaxPacketSize は HS で 20 バイト（10 サンプル）。AS General v2（PCM、1ch）、Type I Format v2（2 バイト、16bit） |
 
-- コンフィグ記述子は `bmAttributes=0x80`（バスパワー）、`bMaxPower=250`（500mA）にする。usbhostfs は 0 にしているが、それだと Mac から充電用の電流をもらえない
-- **Feature Unit（ミュートや音量）は置かない**。クラス固有エンドポイント記述子の bmAttributes も 0 にして、サンプリングレートの制御もさせない。こうすると、ホストが送ってくるオーディオのクラスリクエストは原則なくなり、EP0 で応答するコードが要らない。音量は PSP 側の gain で決める
-- レートは M1（§7 S3）で決める。PSP の `sceAudioInput` が対応するのは 44100、22050、11025Hz。44.1kHz の場合は 1ms あたり 44 か 45 サンプル（10ms ごとに 44×9 ＋ 45×1）で、wMaxPacketSize は 90 バイトになる
-- データ用のエンドポイントは EP1〜EP3 の 3 本で、usbhostfs と同じ数に収まる
+- デバイス記述子は IAD を使うので Misc / Common / IAD（0xEF/0x02/0x01）にする
+- 記述子の配列（エンドポイントとインターフェース）は**末尾に 0 の要素を置く**。置かないと `sceUsbStart` が INVALID_ARGUMENT（0x80243002）を返す
+- コンフィグ記述子の `bmAttributes` と `bMaxPower` は、PSP のバスドライバが c0 / 01 に書き換える。それでも接続中は充電される
+- Feature Unit（ミュートや音量）は置かない。音量は PSP 側の gain で決める。ホストからのクラスリクエストはクロックの GET_CUR / GET_RANGE（周波数）と GET_CUR（有効）だけで、EP0 で応答する
+- レートは 44.1kHz 固定（M1 で `sceAudioInput` の音質を確認して変えるかを決める）
+- `make -C psp/prx check` で、記述子をバスドライバと同じ順序でバイト列にし、UAC2 の構造を Mac 上で事前に検査できる。macOS は壊れた記述子のエンドポイントを開くとカーネルパニックすることがあるので、記述子を変えたら必ず通す
 
 ### 4.2 deck.prx（カーネル）
 
@@ -97,7 +100,13 @@ usbhostfs の `main.c` から次を流用する: 記述子の組み方、`UsbDri
 - 送信と受信でバッファを分ける（64 バイト境界に揃えた各 64KB）。送信は `Sema` で直列化する
 - **送信にタイムアウトを付ける**: 500ms で `sceUsbbdReqCancel` して取り消す。Mac アプリが落ちても PSP の UI を固めないため
 - EBOOT から受け取るポインタは、ユーザー空間のアドレスか（`addr & 0x80000000 == 0`）と長さを確かめてからコピーする
-- **マイク**: `changeSetting(2, 1)` でマイクのスレッドを起動し、`changeSetting(2, 0)`、detach、stop のいずれかで止める。スレッドは `sceAudioInputBlocking` で 10ms ずつ取り込み、リングバッファに入れて、iso IN に 1ms 分ずつ `sceUsbbdReqSend` する。バッファが足りなくなったら無音で埋め、あふれたら古いほうから捨てる
+- **マイク**: `changeSetting(2, 1)` でマイクのスレッドを起動し、`changeSetting(2, 0)`、detach、stop のいずれかで止める。iso の送信要求は**同時に 1 本だけ**出し、完了したら次を出す（2 本出すと 2 本目が詰まる）。1 パケットのサンプル数は経過時間から決め、取りこぼしたマイクロフレームの分は後続のパケットで取り返す。P5 では、`sceAudioInputBlocking` で取り込んだ音をリングバッファに入れ、そこから「たまった分だけ」詰める形に置き換える
+- **バスドライバの癖**（フェーズ 0 で判明）:
+  - hi-speed で bInterval 4（1ms）の iso は、要求を「完了」と報告しながら長さ 0 のパケットしか出さない。bInterval 1 なら正しく出る
+  - ホストがそのマイクロフレームをポーリングしなかった iso パケットは、完了扱いのまま捨てられる
+  - `sceUsbbdReqCancelAll` で取り消した要求には onComplete が呼ばれない
+  - EP0 の応答が届かずキューに残ることがあるので、次の応答を出す前に `sceUsbbdReqCancel` で取り除く（これをしないと、しばらくして PSP が落ちる）
+  - ホストがポーリングをやめても iso の要求を取り消して出し直すことを繰り返さない。取り消すのは alt 0 になったときと終了時だけ
 
 エクスポートする API（`DeckUsb`、属性 0x4001）:
 
@@ -324,6 +333,20 @@ S1-a で失敗した場合の代替案:
 - EBOOT からカーネル PRX をロードできないとき: ARK の `kuKernelLoadModule` を使う。それでも駄目なら `GAME.TXT` に登録するプラグイン方式にする
 - Register が失敗するとき: `flash0:/kd/usb.prx` がロードされているかを確認する
 
+### フェーズ 0 の結果（2026-10-17、PSP-3000 / 6.61 ARK-5、macOS 27.0.1）
+
+| 項目 | 結果 |
+|---|---|
+| S1-a | PRX のロード、Register、Start、Activate はすべて 0 |
+| S1-b | **hi-speed（480Mb/s）**で接続。Mac からは `"PSP" Type C`（Sony）として見える |
+| S1-c | 境界の長さ 12 通りの往復がすべて一致（パディング規則は有効） |
+| S1-d | 片方向 **13.6MB/s**（UAC と同時に動かしても変わらない） |
+| S1-e | Mac 側が途中で読むのをやめても PSP は固まらず、次の接続で復帰する |
+| S1-f | UAC1 は不可（1ms 周期では PSP が空のパケットしか出さず、125μs 周期は UAC1 では記述できない）。**UAC2・125μs で合格**：sox で CoreAudio から直接録った 10 秒間、試験音の欠けは 0。録音を止めたあとに放置しても PSP は落ちない |
+| S1-g | 接続中は `charging=1` |
+
+検証のときの注意: ffmpeg の AVFoundation 入力は、512 サンプル単位で 12 サンプルずつ捨てることがあり、正常な音声でも途切れて聞こえる。音の連続性は `sox -D -t coreaudio` で録って確かめる。
+
 ### S2: 日本語フォント（P2 の最初）
 
 intraFont で jpn0.pgf を開き、`INTRAFONT_STRING_UTF8` で「漢字かなカナ ABC 123 ①」を描いて、表示できた文字を記録する。
@@ -333,7 +356,7 @@ intraFont で jpn0.pgf を開き、`INTRAFONT_STRING_UTF8` で「漢字かなカ
 | 手順 | 内容 | 合格条件 |
 |---|---|---|
 | M1 | `sceAudioInputInit(0, gain, 0)` と `sceAudioInputBlocking` で、44100 / 22050 / 11025Hz それぞれ 5 秒を `ms0:` に WAV で保存し、Mac で聴く | 内蔵マイクから音が入る。採用するレートと gain を決める |
-| M2 | S1-f のサイン波をマイク入力に置き換える | 10 分間途切れない。手を叩いて測った遅延が 100ms 未満 |
+| M2 | 試験音をマイク入力に置き換える | sox で 10 分録って途切れない。手を叩いて測った遅延が 100ms 未満 |
 
 ## 8. 追加機能（採用済み）
 
