@@ -10,8 +10,6 @@ const struct deck_variant deck_variants[DECK_NVARIANTS] = {
     { "vendor iso, hs 1ms (diag)",  DECK_KIND_VENDOR, 4 },
     { "vendor iso, hs 125us (diag)", DECK_KIND_VENDOR, 1 },
     { "bulk only",                  DECK_KIND_NONE,   0 },
-    { "UAC1 iso, full-speed only",  DECK_KIND_UAC,    4, 1 },
-    { "vendor iso, full-speed (diag)", DECK_KIND_VENDOR, 4, 1 },
 };
 
 static const unsigned char ac_extra[] = {

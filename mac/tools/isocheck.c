@@ -23,6 +23,25 @@ int main(void)
         fprintf(stderr, "PSP not found\n");
         return 1;
     }
+    /* A malformed descriptor once panicked the macOS USB stack here; only proceed on the expected shape. */
+    {
+        struct libusb_config_descriptor *c = NULL;
+        const struct libusb_interface_descriptor *alt;
+        int ok = !libusb_get_active_config_descriptor(libusb_get_device(h), &c);
+
+        ok = ok && c->bNumInterfaces == 2 && c->interface[1].num_altsetting == 2;
+        alt = ok ? &c->interface[1].altsetting[1] : NULL;
+        ok = ok && alt->bInterfaceClass == 0xFF && alt->bNumEndpoints == 1 &&
+             alt->endpoint[0].bEndpointAddress == 0x83 && (alt->endpoint[0].bmAttributes & 3) == 1 &&
+             alt->endpoint[0].wMaxPacketSize > 0 && alt->endpoint[0].wMaxPacketSize <= 1024 &&
+             alt->endpoint[0].bInterval >= 1 && alt->endpoint[0].bInterval <= 16;
+        if (c)
+            libusb_free_config_descriptor(c);
+        if (!ok) {
+            fprintf(stderr, "unexpected descriptors (not a vendor-iso layout?) - refusing to open EP 0x83\n");
+            return 1;
+        }
+    }
     mps = libusb_get_max_iso_packet_size(libusb_get_device(h), 0x83);
     printf("EP 0x83 max iso packet: %d\n", mps);
     if (mps <= 0 || mps > 1024 || (r = libusb_claim_interface(h, 1)) || (r = libusb_set_interface_alt_setting(h, 1, 1))) {

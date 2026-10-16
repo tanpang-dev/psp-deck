@@ -25,7 +25,6 @@ static int g_iso_mode = DECK_ISO_SINGLE;
 static const char *const g_layouts[] = {
     "UAC1 iso, hs 1ms", "UAC1 iso, hs 125us", "vendor iso, hs 1ms (diag)",
     "vendor iso, hs 125us (diag)", "bulk only",
-    "UAC1 iso, full-speed only", "vendor iso, full-speed (diag)",
 };
 #define NLAYOUTS ((int)(sizeof(g_layouts) / sizeof(g_layouts[0])))
 

@@ -219,8 +219,6 @@ static int start_variants(void)
         g_driver.numEndpoints = iso ? 4 : 3;
         g_if.numInterfaces = deck_variant_ifaces(&deck_variants[v]);
         g_mic_if = deck_variants[v].kind == DECK_KIND_UAC ? 2 : 1;
-        g_driver.descriptor_hi = deck_variants[v].fs_only ? NULL : &deck_dev_hi;
-        g_driver.configuration_hi = deck_variants[v].fs_only ? NULL : &deck_config_hi;
         g_info.variant = v;
         ret = g_info.ret_register = sceUsbbdRegister(&g_driver);
         if (ret >= 0)

@@ -13,10 +13,9 @@ struct deck_variant {
     const char *name;
     unsigned char kind;
     unsigned char hs_interval;  /* bInterval at hi-speed: 4 = 1 ms, 1 = 125 us */
-    unsigned char fs_only;      /* no hi-speed descriptors handed to the bus driver */
 };
 
-#define DECK_NVARIANTS 7
+#define DECK_NVARIANTS 5
 
 extern const struct deck_variant deck_variants[DECK_NVARIANTS];
 extern struct DeviceDescriptor deck_dev_hi, deck_dev_full;
