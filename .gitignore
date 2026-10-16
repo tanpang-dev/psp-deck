@@ -11,3 +11,5 @@ DeckUsb.S
 mac/tools/usbecho
 mac/tools/isocheck
 mac/tools/ctrlcheck
+mac/build/
+.build/
