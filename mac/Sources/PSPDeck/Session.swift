@@ -116,9 +116,11 @@ final class Session {
         }
     }
 
-    private func sendMode() {
+    /// Mouse mode, mute and the mic gain (signed byte). Also called when the settings change.
+    func sendMode() {
         stick.mouseMode = runner.mouseMode
-        link.send(Int(DECK_M_MODE), [runner.mouseMode ? 1 : 0, runner.micMuted ? 1 : 0, 0, 0])
+        let gain = Int8(clamping: min(max(store.config.mic.gain, -18), 30))
+        link.send(Int(DECK_M_MODE), [runner.mouseMode ? 1 : 0, runner.micMuted ? 1 : 0, UInt8(bitPattern: gain), 0])
     }
 
     private func le16(_ v: Int) -> [UInt8] {

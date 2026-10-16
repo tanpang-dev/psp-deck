@@ -29,6 +29,15 @@ struct SettingsView: View {
                     get: { store.config.stick.invertScroll },
                     set: { v in store.update { $0.stick.invertScroll = v } }))
             }
+            Section("マイク") {
+                LabeledContent("感度（\(store.config.mic.gain) dB）") {
+                    Slider(value: Binding(get: { Double(store.config.mic.gain) },
+                                          set: { v in store.update { $0.mic.gain = Int(v.rounded()) } }),
+                           in: -18...30, step: 1)
+                }
+                Text("Mac の録音アプリで入力に「\"PSP\" Type C」を選ぶと、PSP の内蔵マイクが使えます。")
+                    .foregroundStyle(.secondary)
+            }
             Section("その他") {
                 Toggle("ログイン時に起動", isOn: Binding(get: { SMAppService.mainApp.status == .enabled },
                                                      set: setLoginItem))

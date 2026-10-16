@@ -18,6 +18,7 @@ typedef struct {
     int variant_ret[8];        /* sceUsbStart result per layout tried */
     int ep3_num, iso_timeouts, iso_nlog, uac_answered, iso_behind;
     int ep0_sent, ep0_done, ep0_ret;
+    int mic_underruns, mic_dropped;  /* iso packets with nothing captured / samples dropped for latency */
     int iso_log[8][3];         /* last completions: returnCode, transmitted, microseconds */
     int nreq;                  /* control requests seen; last 8 kept raw in req_log */
     unsigned char req_log[8][8];
@@ -29,9 +30,10 @@ int deckUsbRead(void *buf, int max, int timeout_ms);  /* bytes, 0 on timeout, <0
 int deckUsbWrite(const void *buf, int len);           /* bytes, <0 on error (500 ms timeout) */
 int deckUsbInfo(deck_usb_info *out);
 int deckSetBacklight(int on);           /* 0 = dim, 1 = restore */
+int deckMicPush(const short *samples, int count);  /* 16-bit mono at 44.1 kHz */
 
 /* Phase-0 diagnostics */
-#define DECK_ISO_FIXED  1      /* always send full 90-byte packets */
+#define DECK_ISO_TONE   1      /* send an 882 Hz test tone instead of the microphone */
 #define DECK_ISO_SINGLE 2      /* one iso request in flight instead of two */
 int deckUsbIsoMode(int flags);
 int deckUsbFirstLayout(int v); /* call before deckUsbStart */

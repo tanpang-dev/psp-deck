@@ -19,7 +19,7 @@ static unsigned char g_buf[65536] __attribute__((aligned(64)));
 static volatile int g_run = 1;
 static int g_echoed, g_last_read, g_last_write;
 static unsigned g_bytes;
-static int g_iso_mode = DECK_ISO_SINGLE;
+static int g_iso_mode = DECK_ISO_SINGLE | DECK_ISO_TONE;  /* this spike has no microphone capture */
 
 /* Same order as deck_variants in psp/prx/descriptors.c */
 static const char *const g_layouts[] = {
@@ -110,7 +110,7 @@ static void show(const char *prx, int mod, int start)
     printf("echoed %d  bytes %u  last read %d write %d          \n", g_echoed, g_bytes, g_last_read, g_last_write);
     printf("mic alt %d  ep3=%d  iso sent %d  err %d  last %08X  stalls %d    \n", in.mic_alt, in.ep3_num,
            in.iso_sent, in.iso_err, in.iso_last_ret, in.iso_timeouts);
-    printf("mode: [TRIANGLE] fixed90=%d  [SQUARE] single=%d      \n", !!(g_iso_mode & DECK_ISO_FIXED),
+    printf("mode: [TRIANGLE] tone=%d  [SQUARE] single=%d      \n", !!(g_iso_mode & DECK_ISO_TONE),
            !!(g_iso_mode & DECK_ISO_SINGLE));
     printf("iso log (ret / bytes / us), newest first:\n");
     for (i = 0; i < 8; i++) {
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
         sceCtrlReadBufferPositive(&pad, 1);
         if (mod >= 0 && (pad.Buttons & ~prev & (PSP_CTRL_TRIANGLE | PSP_CTRL_SQUARE))) {
             if (pad.Buttons & ~prev & PSP_CTRL_TRIANGLE)
-                g_iso_mode ^= DECK_ISO_FIXED;
+                g_iso_mode ^= DECK_ISO_TONE;
             if (pad.Buttons & ~prev & PSP_CTRL_SQUARE)
                 g_iso_mode ^= DECK_ISO_SINGLE;
             deckUsbIsoMode(g_iso_mode);

@@ -4,7 +4,7 @@ PRXDIR = prx
 
 INCDIR = $(PRXDIR)
 CFLAGS = -O2 -G0 -Wall
-LIBS = -lintrafont -lpspgum -lpspgu -lpsppower -lm
+LIBS = -lintrafont -lpspgum -lpspgu -lpspaudio -lpsppower -lm
 
 BUILD_PRX = 1
 PSP_FW_VERSION = 661

@@ -2,6 +2,7 @@
  * HOME exits. See docs/DESIGN.md §4.3-4.5 and §6. */
 #include <pspkernel.h>
 #include <pspctrl.h>
+#include <pspaudio.h>
 #include <psppower.h>
 #include <pspsdk.h>
 #include <stdio.h>
@@ -15,8 +16,9 @@ PSP_MODULE_INFO("PSPDeck", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-/* deck.prx layout 2 = bulk only. The microphone (layout 0, UAC2) is switched on in phase 5. */
-#define USB_LAYOUT 2
+/* deck.prx layout 0: vendor bulk link + UAC2 microphone. */
+#define USB_LAYOUT 0
+#define MIC_BLOCK 512             /* samples per sceAudioInputBlocking (multiple of 64): ~11.6 ms */
 #define IDLE_DIM_US (60 * 1000000u)
 
 static const unsigned g_assignable[] = {
@@ -35,7 +37,7 @@ typedef struct {
 
 static volatile int g_run = 1;
 static volatile int g_hello;          /* 0 = waiting, 1 = connected, -1 = version mismatch */
-static volatile int g_mac_version, g_mouse, g_muted;
+static volatile int g_mac_version, g_mouse, g_muted, g_mic_gain, g_mic_live;
 static SceUID g_lock;
 static deck_view g_view;
 static unsigned char g_rx[DECK_MAX_FRAME] __attribute__((aligned(64)));
@@ -162,6 +164,8 @@ static int link_thread(SceSize a, void *p)
             if (len >= 2) {
                 g_mouse = pl[0];
                 g_muted = pl[1];
+                if (len >= 3)
+                    g_mic_gain = (int8_t)pl[2];
             }
             break;
         case DECK_M_STATUS:
@@ -174,6 +178,36 @@ static int link_thread(SceSize a, void *p)
             apps_on_message(pl, len);
             break;
         }
+    }
+    return 0;
+}
+
+/* Captures the built-in mic while the Mac has the PSP input open (UAC2 alt 1) and hands it to deck.prx. */
+static int mic_thread(SceSize a, void *p)
+{
+    static short buf[MIC_BLOCK] __attribute__((aligned(64)));
+    int gain = 1000;  /* forces an init on first use */
+
+    while (g_run) {
+        deck_usb_info in;
+
+        deckUsbInfo(&in);
+        g_mic_live = in.mic_alt != 0;
+        if (!g_mic_live) {
+            sceKernelDelayThread(50000);
+            continue;
+        }
+        if (gain != g_mic_gain) {
+            gain = g_mic_gain;
+            sceAudioInputInit(0, gain, 0);
+        }
+        if (sceAudioInputBlocking(MIC_BLOCK, 44100, buf) < 0) {
+            sceKernelDelayThread(10000);
+            continue;
+        }
+        if (g_muted)
+            memset(buf, 0, sizeof(buf));
+        deckMicPush(buf, MIC_BLOCK);
     }
     return 0;
 }
@@ -280,6 +314,10 @@ static void draw(const deck_view *v, int usb_ok)
         x -= 50;
         ui_text(x, 17, 0.6f, C_WARN, 50, "MOUSE");
     }
+    if (g_mic_live) {
+        x -= 44;
+        ui_text(x, 17, 0.6f, g_muted ? C_DIM : UI_RGB(255, 90, 90), 44, g_muted ? "MUTE" : "● MIC");
+    }
     if (g_drops) {
         snprintf(line, sizeof(line), "drop %u", g_drops);
         x -= 60;
@@ -343,8 +381,11 @@ int main(int argc, char **argv)
     if (mod >= 0) {
         deckUsbFirstLayout(USB_LAYOUT);
         start = deckUsbStart();
-        if (start >= 0)
+        if (start >= 0) {
             sceKernelStartThread(sceKernelCreateThread("link", link_thread, 0x18, 0x4000, 0, NULL), 0, NULL);
+            /* Higher priority than the UI so a slow frame never starves the capture. */
+            sceKernelStartThread(sceKernelCreateThread("mic", mic_thread, 0x12, 0x4000, 0, NULL), 0, NULL);
+        }
     }
 
     last_input = sceKernelGetSystemTimeLow();

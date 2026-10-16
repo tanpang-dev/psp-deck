@@ -147,7 +147,10 @@ static struct UsbDriver g_driver = {
     drv_start, drv_stop, NULL,
 };
 
-/* ---- microphone (phase 0: 882 Hz test tone, exactly 50 samples per period) ---- */
+/* ---- microphone ----
+ * The EBOOT captures the built-in mic with sceAudioInput (user mode) and pushes it here; each iso packet
+ * then carries whatever has accumulated, so the stream runs on the PSP's audio clock and the host
+ * (asynchronous endpoint) follows it. DECK_ISO_TONE swaps in an 882 Hz test tone for diagnostics. */
 
 static const short g_tone[50] = {
     0, 1504, 2984, 4417, 5781, 7053, 8215, 9246, 10132, 10858, 11413, 11787, 11976, 11976, 11787,
@@ -156,14 +159,40 @@ static const short g_tone[50] = {
     -10132, -9246, -8215, -7053, -5781, -4417, -2984, -1504,
 };
 
+#define RING 8192                  /* samples; power of two */
+#define RING_MAX_FILL 2048         /* ~46 ms: older audio is dropped to keep latency low */
+
+static short g_ring[RING];
+static unsigned g_ring_head, g_ring_tail;  /* free-running; fill = head - tail */
+static SceUID g_ring_lock = -1;
+
 static struct UsbbdDeviceRequest g_iso_req[2];
 static short g_iso_buf[2][64] __attribute__((aligned(64)));
 _Static_assert(sizeof(g_iso_buf[0]) >= MIC_MAX_PACKET, "iso buffer smaller than one packet");
-static int g_tone_pos, g_iso_busy[2], g_iso_mode = DECK_ISO_SINGLE, g_first_layout, g_iso_per_sec = 1000;
+static int g_tone_pos, g_tone_acc, g_iso_busy[2], g_iso_mode = DECK_ISO_SINGLE, g_first_layout, g_iso_per_sec = 1000;
 static u32 g_iso_t0[2];
-/* Samples come due by wall clock, so a missed microframe is made up in the next packets. */
-static u32 g_due_last, g_due_rem;
-static int g_owed;
+
+static int ring_take(short *dst, int max)
+{
+    int n, k;
+
+    sceKernelWaitSema(g_ring_lock, 1, NULL);
+    n = g_ring_head - g_ring_tail;
+    if (n > max)
+        n = max;
+    for (k = 0; k < n; k++)
+        dst[k] = g_ring[(g_ring_tail + k) & (RING - 1)];
+    g_ring_tail += n;
+    sceKernelSignalSema(g_ring_lock, 1);
+    return n;
+}
+
+static void ring_reset(void)
+{
+    sceKernelWaitSema(g_ring_lock, 1, NULL);
+    g_ring_tail = g_ring_head;
+    sceKernelSignalSema(g_ring_lock, 1);
+}
 
 static void on_iso0(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO0); }
 static void on_iso1(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO1); }
@@ -183,28 +212,21 @@ static void iso_queue(int i)
 
     if ((i == 1 && (g_iso_mode & DECK_ISO_SINGLE)) || g_iso_busy[i])
         return;
-    {
-        u32 now = sceKernelGetSystemTimeLow(), dt = now - g_due_last;
-        int max = deck_iso_packet(g_iso_per_sec) / 2;
-
-        g_due_last = now;
-        if (dt > 50000)
-            dt = 50000;
-        g_due_rem += dt * MIC_RATE;
-        g_owed += g_due_rem / 1000000;
-        g_due_rem %= 1000000;
-        if (g_owed > MIC_RATE / 100)        /* never more than 10 ms behind */
-            g_owed = MIC_RATE / 100;
-        n = g_owed < 1 ? 1 : g_owed < max ? g_owed : max;
-        if (g_owed > max)
-            g_info.iso_behind++;
-        g_owed -= n;
-    }
-    if (g_iso_mode & DECK_ISO_FIXED)
-        n = deck_iso_packet(g_iso_per_sec) / 2;
-    for (k = 0; k < n; k++) {
-        g_iso_buf[i][k] = g_tone[g_tone_pos];
-        g_tone_pos = (g_tone_pos + 1) % 50;
+    if (g_iso_mode & DECK_ISO_TONE) {
+        g_tone_acc += MIC_RATE;
+        n = g_tone_acc / g_iso_per_sec;
+        g_tone_acc %= g_iso_per_sec;
+        for (k = 0; k < n; k++) {
+            g_iso_buf[i][k] = g_tone[g_tone_pos];
+            g_tone_pos = (g_tone_pos + 1) % 50;
+        }
+    } else {
+        n = ring_take(g_iso_buf[i], deck_iso_packet(g_iso_per_sec) / 2);
+        if (n == 0) {              /* nothing captured yet: one silent sample rather than an empty request */
+            g_iso_buf[i][0] = 0;
+            n = 1;
+            g_info.mic_underruns++;
+        }
     }
     sceKernelDcacheWritebackRange(g_iso_buf[i], sizeof(g_iso_buf[i]));
     memset(&g_iso_req[i], 0, sizeof(g_iso_req[i]));
@@ -249,9 +271,7 @@ static int mic_thread(SceSize args, void *argp)
         sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1 | EV_MIC_OFF));
         g_info.ep3_num = g_ep[3].endpointNumber;
         g_iso_per_sec = g_info.speed == 2 ? 8000 : 1000;
-        g_due_last = sceKernelGetSystemTimeLow();
-        g_due_rem = 0;
-        g_owed = 0;
+        ring_reset();
         iso_start();
         for (;;) {
             SceUInt to = 20000;
@@ -473,6 +493,28 @@ int deckSetBacklight(int on)
     return 0;
 }
 
+/* Called by the EBOOT's capture thread with each block from sceAudioInputBlocking. */
+int deckMicPush(const short *samples, int count)
+{
+    int k1 = pspSdkSetK1(0), k;
+
+    if (!user_ok(samples, count * 2) || count <= 0 || count > RING / 2) {
+        pspSdkSetK1(k1);
+        return DECK_EINVAL;
+    }
+    sceKernelWaitSema(g_ring_lock, 1, NULL);
+    for (k = 0; k < count; k++)
+        g_ring[(g_ring_head + k) & (RING - 1)] = samples[k];
+    g_ring_head += count;
+    if (g_ring_head - g_ring_tail > RING_MAX_FILL) {
+        g_info.mic_dropped += g_ring_head - g_ring_tail - RING_MAX_FILL;
+        g_ring_tail = g_ring_head - RING_MAX_FILL;
+    }
+    sceKernelSignalSema(g_ring_lock, 1);
+    pspSdkSetK1(k1);
+    return 0;
+}
+
 int deckUsbIsoMode(int flags)
 {
     g_iso_mode = flags;
@@ -503,6 +545,7 @@ int module_start(SceSize args, void *argp)
 {
     g_ev = sceKernelCreateEventFlag("DeckUsbEv", PSP_EVENT_WAITMULTIPLE, 0, NULL);
     g_tx_sema = sceKernelCreateSema("DeckUsbTx", 0, 1, 1, NULL);
+    g_ring_lock = sceKernelCreateSema("DeckMicRing", 0, 1, 1, NULL);
     return (g_ev < 0 || g_tx_sema < 0) ? 1 : 0;
 }
 
@@ -511,5 +554,6 @@ int module_stop(SceSize args, void *argp)
     deckUsbStop();
     sceKernelDeleteEventFlag(g_ev);
     sceKernelDeleteSema(g_tx_sema);
+    sceKernelDeleteSema(g_ring_lock);
     return 0;
 }

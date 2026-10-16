@@ -15,6 +15,7 @@ PSP_EXPORT_FUNC(deckUsbInfo)
 PSP_EXPORT_FUNC(deckUsbIsoMode)
 PSP_EXPORT_FUNC(deckUsbFirstLayout)
 PSP_EXPORT_FUNC(deckSetBacklight)
+PSP_EXPORT_FUNC(deckMicPush)
 PSP_EXPORT_END
 
 PSP_END_EXPORTS

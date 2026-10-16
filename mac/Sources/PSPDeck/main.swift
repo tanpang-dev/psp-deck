@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         session.start()
         configWatch = store.$config.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
             self?.session.sendLabels()
+            self?.session.sendMode()
         }
         // Sending keys and reading window titles both need Accessibility; ask once up front.
         let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
