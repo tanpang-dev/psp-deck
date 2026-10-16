@@ -1,10 +1,10 @@
 TARGET = pspdeck
-OBJS = main.o DeckUsb.o
+OBJS = main.o ui.o DeckUsb.o
 PRXDIR = prx
 
 INCDIR = $(PRXDIR)
 CFLAGS = -O2 -G0 -Wall
-LIBS = -lpsppower
+LIBS = -lintrafont -lpspgum -lpspgu -lpsppower -lm
 
 BUILD_PRX = 1
 PSP_FW_VERSION = 661

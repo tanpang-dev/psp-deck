@@ -452,6 +452,27 @@ out:
     return ret;
 }
 
+void sceDisplaySetBrightness(int level, int unk1);
+void sceDisplayGetBrightness(int *level, int *unk1);
+
+/* Idle dimming (DESIGN §4.4). on=0 dims to a low level, on=1 restores what was there before. */
+int deckSetBacklight(int on)
+{
+    static int saved = -1;
+    int k1 = pspSdkSetK1(0), level, unk;
+
+    if (!on && saved < 0) {
+        sceDisplayGetBrightness(&level, &unk);
+        saved = level;
+        sceDisplaySetBrightness(level < 10 ? level : 10, 0);
+    } else if (on && saved >= 0) {
+        sceDisplaySetBrightness(saved, 0);
+        saved = -1;
+    }
+    pspSdkSetK1(k1);
+    return 0;
+}
+
 int deckUsbIsoMode(int flags)
 {
     g_iso_mode = flags;

@@ -6,7 +6,7 @@ BUILD_PRX = 1
 PRX_EXPORTS = exports.exp
 
 CFLAGS = -Os -G0 -Wall
-LIBS = -lpspusb_driver -lpspusbbus_driver -lpsppower_driver
+LIBS = -lpspusb_driver -lpspusbbus_driver -lpsppower_driver -lpspdisplay_driver
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build_prx.mak

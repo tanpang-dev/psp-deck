@@ -1,12 +1,14 @@
 import AppKit
 import ApplicationServices
+import Combine
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = ConfigStore()
     private lazy var runner = ActionRunner(store: store)
     private lazy var stick = StickDriver(store: store)
-    private lazy var session = Session(runner: runner, stick: stick)
+    private lazy var session = Session(runner: runner, stick: stick, store: store)
+    private var configWatch: AnyCancellable?
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "PSP を探しています…", action: nil, keyEquivalent: "")
     private let errorLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -21,6 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runner.onError = { [weak self] message in self?.showError(message) }
         session.onStatus = { [weak self] status in self?.show(status) }
         session.start()
+        configWatch = store.$config.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.session.sendLabels()
+        }
         // Sending keys and reading window titles both need Accessibility; ask once up front.
         let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
@@ -108,6 +113,9 @@ func selfTest() {
     let partial = try! JSONDecoder().decode(DeckConfig.self, from: Data(#"{"stick":{"deadzone":12}}"#.utf8))
     assert(partial.stick.deadzone == 12 && partial.stick.mouseSpeed == 1 && partial.buttons.count == 5)
     assert(PSPButton(mask: 0x4000) == .cross && PSPButton(mask: PSPButton.circleMask) == nil)
+    assert(utf8Prefix("あいう", maxBytes: 7) == Array("あい".utf8), "must cut on a character boundary")
+    assert(pspLabel(for: ButtonBinding(preset: "launchApp", app: "/Applications/Safari.app")) == "Safari")
+    assert(presets.allSatisfy { $0.label.utf8.count <= 31 }, "labels must fit the LABELS field")
     print("selftest: ok")
 }
 

@@ -28,6 +28,7 @@ int deckUsbStop(void);
 int deckUsbRead(void *buf, int max, int timeout_ms);  /* bytes, 0 on timeout, <0 on error */
 int deckUsbWrite(const void *buf, int len);           /* bytes, <0 on error (500 ms timeout) */
 int deckUsbInfo(deck_usb_info *out);
+int deckSetBacklight(int on);           /* 0 = dim, 1 = restore */
 
 /* Phase-0 diagnostics */
 #define DECK_ISO_FIXED  1      /* always send full 90-byte packets */

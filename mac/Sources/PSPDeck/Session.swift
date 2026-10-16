@@ -13,13 +13,18 @@ final class Session {
     private let link = USBLink()
     private let runner: ActionRunner
     private let stick: StickDriver
+    private let store: ConfigStore
+    private let front = FrontWatch()
+    private var connected = false
     private var hiSpeed = false
     /// Called on the main thread.
     var onStatus: ((Status) -> Void)?
 
-    init(runner: ActionRunner, stick: StickDriver) {
+    init(runner: ActionRunner, stick: StickDriver, store: ConfigStore) {
         self.runner = runner
         self.stick = stick
+        self.store = store
+        front.onChange = { [weak self] f in self?.sendStatus(f) }
         runner.onModeChange = { [weak self] in self?.sendMode() }
         link.onState = { [weak self] state in self?.linkChanged(state) }
         link.onFrame = { [weak self] type, payload in
@@ -29,12 +34,31 @@ final class Session {
 
     func start() {
         link.start()
+        front.start()
+    }
+
+    /// Bottom-bar labels for every assignable button; resent whenever the settings change.
+    func sendLabels() {
+        guard connected else { return }
+        var p: [UInt8] = [UInt8(PSPButton.allCases.count), 0, 0, 0]
+        for b in PSPButton.allCases {
+            p += le32(b.mask) + utf8Prefix(pspLabel(for: store.config.buttons[b.rawValue]), maxBytes: 31) + [0]
+        }
+        link.send(Int(DECK_M_LABELS), p)
+    }
+
+    private func sendStatus(_ f: FrontWatch.Front) {
+        guard connected else { return }
+        let p = le32(UInt32(bitPattern: f.pid)) + utf8Prefix(f.name, maxBytes: 63) + [0]
+            + utf8Prefix(f.title, maxBytes: 255) + [0]
+        link.send(Int(DECK_M_STATUS), p)
     }
 
     private func linkChanged(_ state: USBLink.State) {
         switch state {
         case .searching:
             DispatchQueue.main.async {
+                self.connected = false
                 self.runner.reset()
                 self.stick.stop()
                 self.onStatus?(.searching)
@@ -53,7 +77,10 @@ final class Session {
             if version == Int(DECK_PROTO_VERSION) {
                 runner.reset()
                 stick.mouseMode = false
+                connected = true
                 sendMode()
+                sendLabels()
+                front.resend()
                 onStatus?(.connected(hiSpeed: hiSpeed))
             } else {
                 onStatus?(.versionMismatch(psp: version))
@@ -77,5 +104,9 @@ final class Session {
 
     private func le16(_ v: Int) -> [UInt8] {
         [UInt8(v & 0xFF), UInt8(v >> 8 & 0xFF)]
+    }
+
+    private func le32(_ v: UInt32) -> [UInt8] {
+        [UInt8(v & 0xFF), UInt8(v >> 8 & 0xFF), UInt8(v >> 16 & 0xFF), UInt8(v >> 24)]
     }
 }
