@@ -114,6 +114,8 @@ final class ActionRunner {
             break
         case .keys(let text):
             KeyCombo(text)?.post()
+        case .open(let target):
+            open(target)
         case .launchApp:
             if let app = binding.app {
                 open(app)

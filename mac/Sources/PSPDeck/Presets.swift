@@ -3,6 +3,7 @@ import Foundation
 enum PresetAction {
     case none
     case keys(String)
+    case open(String)   // app path, bundle id or URL
     case launchApp
     case recorded
     case custom
@@ -36,6 +37,9 @@ let presets: [Preset] = [
     Preset(id: "reload", title: "再読み込み", action: .keys("cmd+r"), label: "再読み込み"),
     Preset(id: "previousApp", title: "直前のアプリに戻る", action: .keys("cmd+tab"), label: "前のアプリ"),
     Preset(id: "lockScreen", title: "画面をロック", action: .keys("ctrl+cmd+q"), label: "ロック"),
+    // The Mission Control key sends a special HID code, not F3, so open the app it launches instead.
+    Preset(id: "missionControl", title: "Mission Control（F3）", action: .open("/System/Applications/Mission Control.app"),
+           label: "Mission"),
     Preset(id: "mouseMode", title: "マウスモード切替", action: .mouseMode, label: "マウス"),
     Preset(id: "micMute", title: "マイクミュート", action: .micMute, label: "ミュート"),
     Preset(id: "launchApp", title: "アプリを起動…", action: .launchApp, label: ""),
