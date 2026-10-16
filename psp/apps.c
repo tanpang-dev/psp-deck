@@ -19,6 +19,7 @@
 #define REPEAT_DELAY_US 350000u
 #define REPEAT_RATE_US 120000u
 #define SNAP_BACK_US 2000000u
+#define SETTLE_US 250000u      /* switch apps once the carousel has rested this long */
 #define CENTER_X 240.0f
 #define CENTER_Y 116.0f
 #define RADIUS 170.0f
@@ -39,6 +40,7 @@ static SceUID g_lock = -1;
 static float g_pos, g_vel;
 static int g_sel;
 static unsigned g_last_nav, g_repeat_at;
+static int g_pending;  /* the user moved the carousel and that app has not been brought forward yet */
 
 static void list_free(app_list *l)
 {
@@ -177,10 +179,19 @@ unsigned apps_update(unsigned pressed, unsigned held, int use_circle, unsigned f
     if (dir) {
         move(dir);
         g_last_nav = now;
+        g_pending = 1;
     }
     if (use_circle && (pressed & PSP_CTRL_CIRCLE)) {
         go = g_cur->app[g_sel].pid;
         g_last_nav = now;
+        g_pending = 0;
+    }
+    /* No confirm button needed: once the user stops on an app, bring it to the front. Waiting for the
+     * carousel to rest keeps a held-down D-pad from flashing every app it passes. */
+    if (g_pending && now - g_last_nav > SETTLE_US && !(held & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT))) {
+        g_pending = 0;
+        if (g_cur->app[g_sel].pid != front_pid)
+            go = g_cur->app[g_sel].pid;
     }
     /* After a while without navigation, follow whatever the Mac has in front. */
     front = find_pid(g_cur, front_pid);
@@ -208,6 +219,7 @@ static void draw_icon(const unsigned int *tex, float cx, float cy, float size, f
     v[0] = (tex_vertex){ 0, 0, a << 24 | a << 16 | a << 8 | a, cx - size / 2, cy - size / 2, 0 };
     v[1] = (tex_vertex){ ICON, ICON, a << 24 | a << 16 | a << 8 | a, cx + size / 2, cy + size / 2, 0 };
     sceGuTexImage(0, TEX, TEX, TEX, tex);
+    sceGuTexFlush();
     sceGuDrawArray(GU_SPRITES, GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D, 2, 0, v);
 }
 
@@ -232,6 +244,8 @@ void apps_draw(unsigned front_pid)
             order[j - 1] = t;
         }
 
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_DEPTH_TEST);
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, 0);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
@@ -240,17 +254,21 @@ void apps_draw(unsigned front_pid)
     sceGuBlendFunc(GU_ADD, GU_FIX, GU_ONE_MINUS_SRC_ALPHA, 0xFFFFFFFF, 0);
     for (i = 0; i < count; i++) {
         app_t *a = &g_cur->app[order[i]];
-        float th = (order[i] - g_pos) * STEP_RAD, c = cosf(th), size, x;
+        float th = (order[i] - g_pos) * STEP_RAD, c = cosf(th), size;
 
         if (fabsf(th) > HIDE_RAD || !a->tex)
             continue;
         size = ICON * (0.5f + 0.5f * c);
-        x = CENTER_X + RADIUS * sinf(th);
-        draw_icon(a->tex, x, CENTER_Y, size, 0.3f + 0.7f * (c > 0 ? c : 0));
-        if (a->pid == front_pid)
-            ui_rect(x - 3, CENTER_Y + size / 2 + 5, 6, 6, 0xFFFFC070);
+        draw_icon(a->tex, CENTER_X + RADIUS * sinf(th), CENTER_Y, size, 0.3f + 0.7f * (c > 0 ? c : 0));
     }
     sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+
+    /* Front-app marker: drawn after the icons because ui_rect switches texturing off. */
+    for (i = 0; i < count; i++) {
+        float th = (order[i] - g_pos) * STEP_RAD, c = cosf(th);
+        if (g_cur->app[order[i]].pid == front_pid && fabsf(th) <= HIDE_RAD)
+            ui_rect(CENTER_X + RADIUS * sinf(th) - 3, CENTER_Y + ICON * (0.5f + 0.5f * c) / 2 + 5, 6, 6, 0xFFFFC070);
+    }
 
     mid = (int)floorf(g_pos + 0.5f);
     if (mid >= 0 && mid < n)

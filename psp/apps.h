@@ -14,8 +14,9 @@ void apps_frame_begin(void);
 
 int apps_count(void);
 
-/* Main thread: D-pad LEFT/RIGHT move the carousel (with key repeat); returns the pid to bring to the
- * front when CIRCLE was pressed (and use_circle is set), else 0. front_pid comes from STATUS. */
+/* Main thread: D-pad LEFT/RIGHT move the carousel (with key repeat). Returns the pid to bring to the
+ * front once the carousel has come to rest on another app (or at once on CIRCLE when use_circle is set),
+ * else 0. front_pid comes from STATUS. */
 unsigned apps_update(unsigned pressed, unsigned held, int use_circle, unsigned front_pid);
 
 void apps_draw(unsigned front_pid);

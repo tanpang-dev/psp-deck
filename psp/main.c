@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "apps.h"
+#include "tabs.h"
 #include "deck_usb.h"
 #include "ui.h"
 #include "../proto/deck_proto.h"
@@ -173,6 +174,9 @@ static int link_thread(SceSize a, void *p)
         case DECK_M_APP:
             apps_on_message(pl, len);
             break;
+        case DECK_M_TABS:
+            tabs_on_message(pl, len);
+            break;
         }
     }
     return 0;
@@ -192,6 +196,13 @@ static void send_activate(unsigned pid)
     send(g_tx_main, DECK_P_APP_ACTIVATE, p, sizeof(p));
 }
 
+static void send_tab_select(unsigned window, unsigned index)
+{
+    uint8_t p[8] = { window, window >> 8, window >> 16, window >> 24, index, index >> 8 };
+
+    send(g_tx_main, DECK_P_TAB_SELECT, p, sizeof(p));
+}
+
 static void send_tab_step(int dir)
 {
     int8_t p[4] = { dir };
@@ -199,13 +210,16 @@ static void send_tab_step(int dir)
     send(g_tx_main, DECK_P_TAB_STEP, p, sizeof(p));
 }
 
-/* L / R act on release so that L+R can later open the tab list without a timer (DESIGN §4.4). */
+/* L / R act on release, so that L+R can open the tab list without a timer (DESIGN §4.4). */
 static void handle_lr(unsigned held, unsigned released)
 {
     static int combo;
 
-    if ((held & PSP_CTRL_LTRIGGER) && (held & PSP_CTRL_RTRIGGER))
+    if ((held & PSP_CTRL_LTRIGGER) && (held & PSP_CTRL_RTRIGGER) && !combo) {
         combo = 1;
+        tabs_open();
+        send(g_tx_main, DECK_P_TABLIST_REQ, NULL, 0);
+    }
     if ((released & PSP_CTRL_LTRIGGER) && !combo)
         send_tab_step(-1);
     if ((released & PSP_CTRL_RTRIGGER) && !combo)
@@ -309,6 +323,12 @@ static void draw(const deck_view *v, int usb_ok)
     } else
         ui_text(24, 130, 0.9f, C_DIM, UI_W - 48, "Mac の PSP Deck を待っています…");
 
+    if (tabs_is_open()) {
+        tabs_draw();
+        ui_end();
+        return;
+    }
+
     /* bottom bar: what each button does */
     ui_rect(0, UI_H - 26, UI_W, 26, C_BAR);
     for (i = 0; i < NBUTTONS; i++) {
@@ -334,6 +354,7 @@ int main(int argc, char **argv)
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     g_lock = sceKernelCreateSema("view", 0, 1, 1, NULL);
     apps_init();
+    tabs_init();
     ui_init();
 
     snprintf(path, sizeof(path), "%s", argv[0]);
@@ -367,7 +388,11 @@ int main(int argc, char **argv)
         view = g_view;
         sceKernelSignalSema(g_lock, 1);
         apps_frame_begin();
-        if (g_hello == 1) {
+        if (g_hello == 1 && tabs_is_open()) {
+            unsigned window, index;
+            if (tabs_update(pad.Buttons & ~prev, pad.Buttons, &window, &index))
+                send_tab_select(window, index);
+        } else if (g_hello == 1) {
             /* In mouse mode CIRCLE is a click, so it does not pick an app. */
             unsigned go = apps_update(pad.Buttons & ~prev, pad.Buttons, !g_mouse, view.pid);
             if (go)

@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showError(store.error)
         runner.onError = { [weak self] message in self?.showError(message) }
         session.onStatus = { [weak self] status in self?.show(status) }
+        session.onError = { [weak self] message in self?.showError(message) }
         session.start()
         configWatch = store.$config.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
             self?.session.sendLabels()
