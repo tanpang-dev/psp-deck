@@ -9,3 +9,4 @@ PARAM.SFO
 dist/
 DeckUsb.S
 mac/tools/usbecho
+mac/tools/isocheck

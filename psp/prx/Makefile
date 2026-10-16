@@ -5,7 +5,7 @@ USE_KERNEL_LIBS = 1
 BUILD_PRX = 1
 PRX_EXPORTS = exports.exp
 
-CFLAGS = -Os -G0 -Wall $(if $(NO_UAC),-DNO_UAC)
+CFLAGS = -Os -G0 -Wall
 LIBS = -lpspusb_driver -lpspusbbus_driver -lpsppower_driver
 
 PSPSDK = $(shell psp-config --pspsdk-path)

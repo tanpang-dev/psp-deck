@@ -21,6 +21,5 @@ DeckUsb.o: $(PRXDIR)/exports.exp
 # dist/PSPDECKECHO/ is the folder to copy to ms0:/PSP/GAME/
 dist: EBOOT.PBP
 	mkdir -p dist/PSPDECKECHO
-	$(MAKE) -C $(PRXDIR) clean all NO_UAC=1 && cp $(PRXDIR)/deck.prx dist/PSPDECKECHO/deck_nouac.prx
 	$(MAKE) -C $(PRXDIR) clean all && cp $(PRXDIR)/deck.prx dist/PSPDECKECHO/deck.prx
 	cp EBOOT.PBP dist/PSPDECKECHO/

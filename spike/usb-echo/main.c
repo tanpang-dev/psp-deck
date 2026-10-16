@@ -1,5 +1,5 @@
-/* S1 spike: loads deck.prx (hold X at launch for deck_nouac.prx), echoes every bulk frame back and
- * shows link / mic / charging diagnostics. START+SELECT or HOME exits. */
+/* S1 spike: pick a descriptor layout, load deck.prx, echo every bulk frame back and show link / mic /
+ * charging diagnostics. START+SELECT or HOME exits. */
 #include <pspkernel.h>
 #include <pspdebug.h>
 #include <pspctrl.h>
@@ -19,6 +19,44 @@ static unsigned char g_buf[65536] __attribute__((aligned(64)));
 static volatile int g_run = 1;
 static int g_echoed, g_last_read, g_last_write;
 static unsigned g_bytes;
+static int g_iso_mode = DECK_ISO_SINGLE;
+
+/* Same order as deck_variants in psp/prx/descriptors.c */
+static const char *const g_layouts[] = {
+    "UAC1 iso, hs 1ms", "UAC1 iso, hs 125us", "vendor iso, hs 1ms (diag)",
+    "vendor iso, hs 125us (diag)", "bulk only",
+    "UAC1 iso, full-speed only", "vendor iso, full-speed (diag)",
+};
+#define NLAYOUTS ((int)(sizeof(g_layouts) / sizeof(g_layouts[0])))
+
+static int choose_layout(void)
+{
+    SceCtrlData pad;
+    unsigned prev = ~0u;
+    int sel = 0, i;
+
+    for (;;) {
+        pspDebugScreenSetXY(0, 0);
+        printf("PSP Deck S1 spike - choose USB layout\n\n");
+        for (i = 0; i < NLAYOUTS; i++)
+            printf(" %c %d: %s          \n", i == sel ? '>' : ' ', i, g_layouts[i]);
+        printf("\nUP/DOWN: select   CIRCLE: start\n");
+        sceCtrlReadBufferPositive(&pad, 1);
+        unsigned now = pad.Buttons & ~prev;
+        prev = pad.Buttons;
+        if (now & PSP_CTRL_UP)
+            sel = (sel + NLAYOUTS - 1) % NLAYOUTS;
+        if (now & PSP_CTRL_DOWN)
+            sel = (sel + 1) % NLAYOUTS;
+        if (now & PSP_CTRL_CIRCLE)
+            break;
+        if (!g_run)
+            break;
+        sceKernelDelayThread(30000);
+    }
+    pspDebugScreenClear();
+    return sel;
+}
 
 static int exit_cb(int a, int b, void *c)
 {
@@ -60,10 +98,10 @@ static void show(const char *prx, int mod, int start)
     memset(&in, 0, sizeof(in));
     deckUsbInfo(&in);
     pspDebugScreenSetXY(0, 0);
-    printf("PSP Deck S1 spike  [%s]\n\n", prx);
+    printf("PSP Deck S1 spike  [%s] %s\n", prx, g_layouts[in.variant < NLAYOUTS ? in.variant : 0]);
     printf("load %08X  start %08X\n", mod, start);
     printf("register %08X bus %08X drv %08X act %08X\n", in.ret_register, in.ret_bus, in.ret_driver, in.ret_activate);
-    printf("charge syscon %08X power %08X  charging=%d batt=%d%%   \n\n",
+    printf("charge syscon %08X power %08X  charging=%d batt=%d%%   \n",
            in.ret_charge_syscon, in.ret_charge_power, scePowerIsBatteryCharging(), scePowerGetBatteryLifePercent());
     printf("layout %d  tried:", in.variant);
     for (i = 0; i <= in.variant && i < 8; i++)
@@ -71,14 +109,25 @@ static void show(const char *prx, int mod, int start)
     printf("\n");
     printf("speed %d (%s)            \n", in.speed, in.speed == 2 ? "hi 480M" : in.speed == 1 ? "full 12M" : "detached");
     printf("rx %d  tx %d  tx_timeouts %d          \n", in.rx_frames, in.tx_frames, in.tx_timeouts);
-    printf("echoed %d  bytes %u  last read %d write %d          \n\n", g_echoed, g_bytes, g_last_read, g_last_write);
-    printf("mic alt %d  iso sent %d  err %d  last %08X       \n\n", in.mic_alt, in.iso_sent, in.iso_err, in.iso_last_ret);
+    printf("echoed %d  bytes %u  last read %d write %d          \n", g_echoed, g_bytes, g_last_read, g_last_write);
+    printf("mic alt %d  ep3=%d  iso sent %d  err %d  last %08X  stalls %d    \n", in.mic_alt, in.ep3_num,
+           in.iso_sent, in.iso_err, in.iso_last_ret, in.iso_timeouts);
+    printf("mode: [TRIANGLE] fixed90=%d  [SQUARE] single=%d      \n", !!(g_iso_mode & DECK_ISO_FIXED),
+           !!(g_iso_mode & DECK_ISO_SINGLE));
+    printf("iso log (ret / bytes / us), newest first:\n");
+    for (i = 0; i < 8; i++) {
+        int *e = in.iso_log[(in.iso_nlog - 1 - i) & 7];
+        if (i < in.iso_nlog)
+            printf("  %08X %4d %8d          \n", e[0], e[1], e[2]);
+        else
+            printf("                                   \n");
+    }
     printf("control requests: %d\n", in.nreq);
-    for (i = 0; i < 8 && i < in.nreq; i++) {
+    for (i = 0; i < 3 && i < in.nreq; i++) {
         unsigned char *r = in.req_log[(in.nreq - 1 - i) & 7];
         printf("  %02X %02X %02X%02X %02X%02X %02X%02X\n", r[0], r[1], r[3], r[2], r[5], r[4], r[7], r[6]);
     }
-    printf("\nSTART+SELECT: exit\n");
+    printf("START+SELECT: exit\n");
 }
 
 int main(int argc, char **argv)
@@ -86,14 +135,16 @@ int main(int argc, char **argv)
     char path[256];
     const char *name;
     SceCtrlData pad;
-    int mod, start = -1;
+    int mod, start = -1, first;
+    unsigned prev = 0;
     char *slash;
 
     pspDebugScreenInit();
     sceKernelStartThread(sceKernelCreateThread("cb", cb_thread, 0x11, 0x1000, 0, NULL), 0, NULL);
     sceCtrlSetSamplingCycle(0);
     sceCtrlReadBufferPositive(&pad, 1);
-    name = (pad.Buttons & PSP_CTRL_CROSS) ? "deck_nouac.prx" : "deck.prx";
+    name = "deck.prx";
+    first = choose_layout();
 
     snprintf(path, sizeof(path), "%s", argv[0]);
     slash = strrchr(path, '/');
@@ -101,6 +152,8 @@ int main(int argc, char **argv)
 
     mod = pspSdkLoadStartModule(path, PSP_MEMORY_PARTITION_KERNEL);
     if (mod >= 0) {
+        deckUsbFirstLayout(first);
+        deckUsbIsoMode(g_iso_mode);
         start = deckUsbStart();
         sceKernelStartThread(sceKernelCreateThread("echo", echo_thread, 0x18, 0x4000, 0, NULL), 0, NULL);
     }
@@ -113,6 +166,14 @@ int main(int argc, char **argv)
             printf("load %s failed: %08X\n%s\n", name, mod, path);
         }
         sceCtrlReadBufferPositive(&pad, 1);
+        if (mod >= 0 && (pad.Buttons & ~prev & (PSP_CTRL_TRIANGLE | PSP_CTRL_SQUARE))) {
+            if (pad.Buttons & ~prev & PSP_CTRL_TRIANGLE)
+                g_iso_mode ^= DECK_ISO_FIXED;
+            if (pad.Buttons & ~prev & PSP_CTRL_SQUARE)
+                g_iso_mode ^= DECK_ISO_SINGLE;
+            deckUsbIsoMode(g_iso_mode);
+        }
+        prev = pad.Buttons;
         if ((pad.Buttons & (PSP_CTRL_START | PSP_CTRL_SELECT)) == (PSP_CTRL_START | PSP_CTRL_SELECT))
             g_run = 0;
         sceKernelDelayThread(100000);

@@ -29,7 +29,7 @@ static int g_rx_pending;
 static unsigned char g_rx_buf[DECK_MAX_FRAME] __attribute__((aligned(64)));
 static unsigned char g_tx_buf[DECK_MAX_FRAME] __attribute__((aligned(64)));
 static deck_usb_info g_info;
-static int g_started;
+static int g_started, g_mic_if = 2;
 
 static int user_ok(const void *p, int len)
 {
@@ -53,14 +53,14 @@ static int process_request(int recipient, int arg, struct DeviceRequest *req)
     memcpy(g_info.req_log[g_info.nreq & 7], req, 8);
     g_info.nreq++;
     /* macOS may switch alt settings via a plain SET_INTERFACE seen here (cf. psp-uvc). */
-    if (req->bmRequestType == 0x01 && req->bRequest == 0x0B && req->wIndex == 2)
+    if (req->bmRequestType == 0x01 && req->bRequest == 0x0B && req->wIndex == g_mic_if)
         set_mic(req->wValue);
     return 0;
 }
 
 static int change_setting(int interface, int alt)
 {
-    if (interface == 2)
+    if (interface == g_mic_if)
         set_mic(alt);
     return 0;
 }
@@ -102,18 +102,32 @@ static const short g_tone[50] = {
 static struct UsbbdDeviceRequest g_iso_req[2];
 static short g_iso_buf[2][64] __attribute__((aligned(64)));
 _Static_assert(sizeof(g_iso_buf[0]) >= MIC_MAX_PACKET, "iso buffer smaller than one packet");
-static int g_tone_pos, g_rate_acc;
+static int g_tone_pos, g_rate_acc, g_iso_busy[2], g_iso_mode = DECK_ISO_SINGLE, g_first_layout, g_iso_per_sec = 1000;
+static u32 g_iso_t0[2];
 
 static void on_iso0(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO0); }
 static void on_iso1(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_ISO1); }
+
+static void iso_log(int ret, int tx, int us)
+{
+    int *e = g_info.iso_log[g_info.iso_nlog & 7];
+    e[0] = ret;
+    e[1] = tx;
+    e[2] = us;
+    g_info.iso_nlog++;
+}
 
 static void iso_queue(int i)
 {
     int n, k, ret;
 
+    if (i == 1 && (g_iso_mode & DECK_ISO_SINGLE))
+        return;
     g_rate_acc += MIC_RATE;
-    n = g_rate_acc / 1000;
-    g_rate_acc %= 1000;
+    n = g_rate_acc / g_iso_per_sec;
+    g_rate_acc %= g_iso_per_sec;
+    if (g_iso_mode & DECK_ISO_FIXED)
+        n = deck_iso_packet(g_iso_per_sec) / 2;
     for (k = 0; k < n; k++) {
         g_iso_buf[i][k] = g_tone[g_tone_pos];
         g_tone_pos = (g_tone_pos + 1) % 50;
@@ -124,11 +138,25 @@ static void iso_queue(int i)
     g_iso_req[i].data = g_iso_buf[i];
     g_iso_req[i].size = n * 2;
     g_iso_req[i].onComplete = i ? on_iso1 : on_iso0;
+    g_iso_t0[i] = sceKernelGetSystemTimeLow();
     ret = sceUsbbdReqSend(&g_iso_req[i]);
+    g_iso_busy[i] = ret >= 0;
     if (ret < 0) {
         g_info.iso_err++;
         g_info.iso_last_ret = ret;
+        iso_log(ret, -1, 0);
     }
+}
+
+/* Drops whatever is in flight and starts over; used when a request never completes. */
+static void iso_restart(void)
+{
+    sceUsbbdReqCancelAll(&g_ep[3]);
+    sceKernelDelayThread(5000);
+    sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1));
+    g_iso_busy[0] = g_iso_busy[1] = 0;
+    iso_queue(0);
+    iso_queue(1);
 }
 
 static int mic_thread(SceSize args, void *argp)
@@ -140,22 +168,30 @@ static int mic_thread(SceSize args, void *argp)
         if (bits & EV_QUIT)
             return 0;
         sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1 | EV_MIC_OFF));
-        iso_queue(0);
-        iso_queue(1);
+        g_info.ep3_num = g_ep[3].endpointNumber;
+        g_iso_per_sec = g_info.speed == 2 && deck_variants[g_info.variant].hs_interval == 1 ? 8000 : 1000;
+        iso_restart();
         for (;;) {
-            SceUInt to = 100000;
+            SceUInt to = 20000;
             if (sceKernelWaitEventFlag(g_ev, EV_ISO0 | EV_ISO1 | EV_MIC_OFF | EV_QUIT,
-                                       PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &bits, &to) < 0)
+                                       PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &bits, &to) < 0) {
+                g_info.iso_timeouts++;
+                iso_restart();
                 continue;
+            }
             if (bits & (EV_MIC_OFF | EV_QUIT)) {
                 sceUsbbdReqCancelAll(&g_ep[3]);
+                g_iso_busy[0] = g_iso_busy[1] = 0;
                 if (bits & EV_QUIT)
                     return 0;
                 break;
             }
             for (int i = 0; i < 2; i++) {
-                if (!(bits & (EV_ISO0 << i)))
+                if (!(bits & (EV_ISO0 << i)) || !g_iso_busy[i])
                     continue;
+                g_iso_busy[i] = 0;
+                iso_log(g_iso_req[i].returnCode, g_iso_req[i].transmitted,
+                        (int)(sceKernelGetSystemTimeLow() - g_iso_t0[i]));
                 if (g_iso_req[i].returnCode == 0)
                     g_info.iso_sent++;
                 else {
@@ -175,17 +211,16 @@ static int start_variants(void)
 {
     int v, ret = -1;
 
-#ifdef NO_UAC
-    v = DECK_VARIANT_NO_UAC;
-#else
-    v = 0;
-#endif
+    v = g_first_layout;
     for (; v < DECK_NVARIANTS; v++) {
-        int uac = deck_variants[v].uac;
+        int iso = deck_variants[v].kind != DECK_KIND_NONE;
 
         deck_desc_apply(v);
-        g_driver.numEndpoints = uac ? 4 : 3;
-        g_if.numInterfaces = uac ? 3 : 1;
+        g_driver.numEndpoints = iso ? 4 : 3;
+        g_if.numInterfaces = deck_variant_ifaces(&deck_variants[v]);
+        g_mic_if = deck_variants[v].kind == DECK_KIND_UAC ? 2 : 1;
+        g_driver.descriptor_hi = deck_variants[v].fs_only ? NULL : &deck_dev_hi;
+        g_driver.configuration_hi = deck_variants[v].fs_only ? NULL : &deck_config_hi;
         g_info.variant = v;
         ret = g_info.ret_register = sceUsbbdRegister(&g_driver);
         if (ret >= 0)
@@ -215,7 +250,7 @@ int deckUsbStart(void)
     if (ret >= 0) {
         g_info.ret_charge_syscon = sceSysconPermitChargeBattery();
         g_info.ret_charge_power = scePowerBatteryPermitCharging();
-        if (deck_variants[g_info.variant].uac) {
+        if (deck_variants[g_info.variant].kind != DECK_KIND_NONE) {
             g_mic_thid = sceKernelCreateThread("DeckMic", mic_thread, 16, 0x1000, 0, NULL);
             if (g_mic_thid >= 0)
                 sceKernelStartThread(g_mic_thid, 0, NULL);
@@ -336,6 +371,20 @@ out:
     sceKernelSignalSema(g_tx_sema, 1);
     pspSdkSetK1(k1);
     return ret;
+}
+
+int deckUsbIsoMode(int flags)
+{
+    g_iso_mode = flags;
+    return 0;
+}
+
+int deckUsbFirstLayout(int v)
+{
+    if (v < 0 || v >= DECK_NVARIANTS)
+        return DECK_EINVAL;
+    g_first_layout = v;
+    return 0;
 }
 
 int deckUsbInfo(deck_usb_info *out)
