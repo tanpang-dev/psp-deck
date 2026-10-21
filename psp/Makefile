@@ -10,6 +10,8 @@ BUILD_PRX = 1
 PSP_FW_VERSION = 661
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSP Deck
+PSP_EBOOT_ICON = ICON0.PNG
+PSP_EBOOT_PIC1 = PIC1.PNG
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
