@@ -37,7 +37,8 @@ typedef struct {
 
 static volatile int g_run = 1;
 static volatile int g_hello;          /* 0 = waiting, 1 = connected, -1 = version mismatch */
-static volatile int g_mac_version, g_mouse, g_muted, g_mic_gain, g_mic_live;
+static volatile int g_mac_version, g_mouse, g_muted, g_mic_live;
+static volatile int g_mic_gain = 30;  /* sceAudioInputInit gain (-18..30); the Mac sends it in MODE too */
 static volatile int g_mic_blocks;
 static SceUID g_lock;
 static deck_view g_view;

@@ -34,18 +34,6 @@ struct StickConfig: Codable, Equatable {
     }
 }
 
-/// Built-in mic input gain passed to sceAudioInputInit (the PSP clamps it to -18...30).
-struct MicConfig: Codable, Equatable {
-    var gain = 0
-
-    init() {}
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        gain = try c.decodeIfPresent(Int.self, forKey: .gain) ?? gain
-    }
-}
-
 struct TabStepKeys: Codable {
     var next: String
     var prev: String
@@ -55,7 +43,6 @@ struct DeckConfig: Codable {
     var buttons: [String: ButtonBinding]
     var custom: [String: CustomAction]
     var stick: StickConfig
-    var mic: MicConfig
     var tabStep: [String: TabStepKeys]
 
     static let defaults = DeckConfig(
@@ -68,18 +55,16 @@ struct DeckConfig: Codable {
         ],
         custom: [:],
         stick: StickConfig(),
-        mic: MicConfig(),
         tabStep: [
             "default": TabStepKeys(next: "ctrl+tab", prev: "ctrl+shift+tab"),
             "com.microsoft.VSCode": TabStepKeys(next: "cmd+opt+right", prev: "cmd+opt+left"),
         ])
 
-    init(buttons: [String: ButtonBinding], custom: [String: CustomAction], stick: StickConfig, mic: MicConfig,
+    init(buttons: [String: ButtonBinding], custom: [String: CustomAction], stick: StickConfig,
          tabStep: [String: TabStepKeys]) {
         self.buttons = buttons
         self.custom = custom
         self.stick = stick
-        self.mic = mic
         self.tabStep = tabStep
     }
 
@@ -90,12 +75,11 @@ struct DeckConfig: Codable {
         buttons = try c.decodeIfPresent([String: ButtonBinding].self, forKey: .buttons) ?? d.buttons
         custom = try c.decodeIfPresent([String: CustomAction].self, forKey: .custom) ?? d.custom
         stick = try c.decodeIfPresent(StickConfig.self, forKey: .stick) ?? d.stick
-        mic = try c.decodeIfPresent(MicConfig.self, forKey: .mic) ?? d.mic
         tabStep = try c.decodeIfPresent([String: TabStepKeys].self, forKey: .tabStep) ?? d.tabStep
     }
 }
 
-/// ~/Library/Application Support/PSPDeck/config.json. The settings window owns `buttons`, `stick` and `mic`;
+/// ~/Library/Application Support/PSPDeck/config.json. The settings window owns `buttons` and `stick`;
 /// `custom` and `tabStep` are only ever edited by hand, so saves leave them untouched on disk.
 final class ConfigStore: ObservableObject {
     static let url = FileManager.default.homeDirectoryForCurrentUser
@@ -128,7 +112,6 @@ final class ConfigStore: ObservableObject {
             let mine = try JSONSerialization.jsonObject(with: JSONEncoder().encode(next)) as? [String: Any] ?? [:]
             raw["buttons"] = mine["buttons"]
             raw["stick"] = mine["stick"]
-            raw["mic"] = mine["mic"]
             try write(JSONSerialization.data(withJSONObject: raw, options: [.prettyPrinted, .sortedKeys]))
             error = nil
         } catch {

@@ -116,11 +116,13 @@ final class Session {
         }
     }
 
+    /// Built-in mic gain for sceAudioInputInit: the maximum; anything lower was too quiet in practice.
+    static let micGain: Int8 = 30
+
     /// Mouse mode, mute and the mic gain (signed byte). Also called when the settings change.
     func sendMode() {
         stick.mouseMode = runner.mouseMode
-        let gain = Int8(clamping: min(max(store.config.mic.gain, -18), 30))
-        link.send(Int(DECK_M_MODE), [runner.mouseMode ? 1 : 0, runner.micMuted ? 1 : 0, UInt8(bitPattern: gain), 0])
+        link.send(Int(DECK_M_MODE), [runner.mouseMode ? 1 : 0, runner.micMuted ? 1 : 0, UInt8(bitPattern: Session.micGain), 0])
     }
 
     private func le16(_ v: Int) -> [UInt8] {

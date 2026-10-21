@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
+            window.setContentSize(NSSize(width: 560, height: 720))  // the hosting view alone would shrink it to nothing
             window.title = "PSP Deck の設定"
             window.isReleasedWhenClosed = false
             settingsWindow = window
