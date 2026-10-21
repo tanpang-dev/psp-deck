@@ -40,6 +40,14 @@ static int user_ok(const void *p, int len)
 static void on_rx(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_RX); }
 static void on_tx(struct UsbbdDeviceRequest *req) { sceKernelSetEventFlag(g_ev, EV_TX); }
 
+/* Alternate-setting notifications as they arrive: source*100 + interface*10 + alt (1 = changeSetting,
+ * 2 = SET_INTERFACE seen in processRequest, 3 = detach). */
+static void log_alt(int source, int interface, int alt)
+{
+    g_info.alt_log[g_info.nalt % 6] = source * 100 + interface * 10 + alt;
+    g_info.nalt++;
+}
+
 static void set_mic(int alt)
 {
     if (alt == g_info.mic_alt)
@@ -110,13 +118,17 @@ static int process_request(int recipient, int arg, struct DeviceRequest *req)
     if (deck_variants[g_info.variant].kind == DECK_KIND_UAC)
         uac2_clock_request(req);
     /* macOS may switch alt settings via a plain SET_INTERFACE seen here (cf. psp-uvc). */
-    if (req->bmRequestType == 0x01 && req->bRequest == 0x0B && req->wIndex == g_mic_if)
-        set_mic(req->wValue);
+    if (req->bmRequestType == 0x01 && req->bRequest == 0x0B) {
+        log_alt(2, req->wIndex, req->wValue);
+        if (req->wIndex == g_mic_if)
+            set_mic(req->wValue);
+    }
     return 0;
 }
 
 static int change_setting(int interface, int alt)
 {
+    log_alt(1, interface, alt);
     if (interface == g_mic_if)
         set_mic(alt);
     return 0;
@@ -131,6 +143,7 @@ static int attach(int speed)
 static void detach(void)
 {
     g_info.speed = 0;
+    log_alt(3, 0, 0);
     set_mic(0);
     sceUsbbdReqCancelAll(&g_ep[1]);
     sceUsbbdReqCancelAll(&g_ep[2]);
@@ -161,10 +174,13 @@ static const short g_tone[50] = {
 
 #define RING 8192                  /* samples; power of two */
 #define RING_MAX_FILL 2048         /* ~46 ms: older audio is dropped to keep latency low */
+#define RING_TARGET 1024           /* ~23 ms cushion the stream is paced around */
 
 static short g_ring[RING];
 static unsigned g_ring_head, g_ring_tail;  /* free-running; fill = head - tail */
 static SceUID g_ring_lock = -1;
+static volatile int g_streaming;
+static int g_primed;  /* the cushion has filled since the stream (re)started */
 
 static struct UsbbdDeviceRequest g_iso_req[2];
 static short g_iso_buf[2][64] __attribute__((aligned(64)));
@@ -183,6 +199,17 @@ static int ring_take(short *dst, int max)
     for (k = 0; k < n; k++)
         dst[k] = g_ring[(g_ring_tail + k) & (RING - 1)];
     g_ring_tail += n;
+    g_info.mic_sent += n;
+    sceKernelSignalSema(g_ring_lock, 1);
+    return n;
+}
+
+static int ring_fill(void)
+{
+    int n;
+
+    sceKernelWaitSema(g_ring_lock, 1, NULL);
+    n = g_ring_head - g_ring_tail;
     sceKernelSignalSema(g_ring_lock, 1);
     return n;
 }
@@ -221,11 +248,30 @@ static void iso_queue(int i)
             g_tone_pos = (g_tone_pos + 1) % 50;
         }
     } else {
-        n = ring_take(g_iso_buf[i], deck_iso_packet(g_iso_per_sec) / 2);
-        if (n == 0) {              /* nothing captured yet: one silent sample rather than an empty request */
-            g_iso_buf[i][0] = 0;
-            n = 1;
-            g_info.mic_underruns++;
+        /* Pace the stream at the nominal rate (44100 / packets per second, i.e. 5 or 6 samples) rather than
+         * draining whatever is there: the host takes every packet as real time, so bursts followed by
+         * empty packets turn into gaps. The ring is kept around RING_TARGET; one sample more or less per
+         * packet absorbs the drift between the PSP's audio clock and the USB frame clock. */
+        int fill = ring_fill();
+
+        g_tone_acc += MIC_RATE;
+        n = g_tone_acc / g_iso_per_sec;
+        g_tone_acc %= g_iso_per_sec;
+        if (!g_primed && fill >= RING_TARGET)
+            g_primed = 1;
+        if (!g_primed) {
+            memset(g_iso_buf[i], 0, n * 2);  /* silence until the cushion is there */
+        } else {
+            if (fill > RING_TARGET + 512)
+                n++;
+            else if (fill < RING_TARGET - 512 && n > 1)
+                n--;
+            k = ring_take(g_iso_buf[i], n);
+            if (k < n) {                     /* ran dry: pad with silence and rebuild the cushion */
+                memset(g_iso_buf[i] + k, 0, (n - k) * 2);
+                g_primed = 0;
+                g_info.mic_underruns++;
+            }
         }
     }
     sceKernelDcacheWritebackRange(g_iso_buf[i], sizeof(g_iso_buf[i]));
@@ -249,6 +295,7 @@ static void iso_queue(int i)
  * Only called when the host leaves alt 1 (or on exit), never in a loop. */
 static void iso_stop(void)
 {
+    g_streaming = 0;
     sceUsbbdReqCancelAll(&g_ep[3]);
     g_iso_busy[0] = g_iso_busy[1] = 0;
     sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1));
@@ -268,10 +315,14 @@ static int mic_thread(SceSize args, void *argp)
         sceKernelWaitEventFlag(g_ev, EV_MIC_ON | EV_QUIT, PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR, &bits, NULL);
         if (bits & EV_QUIT)
             return 0;
-        sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1 | EV_MIC_OFF));
+        /* Drop stale completions only: a MIC_OFF that arrived meanwhile must still stop this stream. */
+        sceKernelClearEventFlag(g_ev, ~(EV_ISO0 | EV_ISO1));
         g_info.ep3_num = g_ep[3].endpointNumber;
-        g_iso_per_sec = g_info.speed == 2 ? 8000 : 1000;
+        g_iso_per_sec = deck_iso_rate(&deck_variants[g_info.variant], g_info.speed == 2);
         ring_reset();
+        g_primed = 0;
+        g_tone_acc = 0;
+        g_streaming = 1;
         iso_start();
         for (;;) {
             SceUInt to = 20000;
@@ -350,7 +401,9 @@ int deckUsbStart(void)
         g_info.ret_charge_syscon = sceSysconPermitChargeBattery();
         g_info.ret_charge_power = scePowerBatteryPermitCharging();
         if (deck_variants[g_info.variant].kind != DECK_KIND_NONE) {
-            g_mic_thid = sceKernelCreateThread("DeckMic", mic_thread, 16, 0x1000, 0, NULL);
+            /* Below the EBOOT's capture thread (0x12): at 8000 completions a second this thread would
+             * otherwise starve the capture; late packets are made up by the next ones (MIC_HEADROOM). */
+            g_mic_thid = sceKernelCreateThread("DeckMic", mic_thread, 0x18, 0x1000, 0, NULL);
             if (g_mic_thid >= 0)
                 sceKernelStartThread(g_mic_thid, 0, NULL);
         }
@@ -506,6 +559,8 @@ int deckMicPush(const short *samples, int count)
     for (k = 0; k < count; k++)
         g_ring[(g_ring_head + k) & (RING - 1)] = samples[k];
     g_ring_head += count;
+    if (g_streaming)
+        g_info.mic_pushes_live++;
     if (g_ring_head - g_ring_tail > RING_MAX_FILL) {
         g_info.mic_dropped += g_ring_head - g_ring_tail - RING_MAX_FILL;
         g_ring_tail = g_ring_head - RING_MAX_FILL;

@@ -23,7 +23,8 @@ static int g_iso_mode = DECK_ISO_SINGLE | DECK_ISO_TONE;  /* this spike has no m
 
 /* Same order as deck_variants in psp/prx/descriptors.c */
 static const char *const g_layouts[] = {
-    "UAC2 mic, hs 125us", "vendor iso, hs 125us (diag)", "bulk only",
+    "UAC2 mic, hs 125us", "vendor iso, hs 125us (diag)", "bulk only", "UAC2 mic, hs 250us", "UAC2 mic, hs 500us",
+    "vendor iso, hs 250us (diag)", "vendor iso, hs 500us (diag)",
 };
 #define NLAYOUTS ((int)(sizeof(g_layouts) / sizeof(g_layouts[0])))
 

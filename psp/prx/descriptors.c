@@ -7,9 +7,13 @@
 #define LE32(v) LE16(v), LE16((v) >> 16)
 
 const struct deck_variant deck_variants[DECK_NVARIANTS] = {
-    { "UAC2 mic, hs 125us",          DECK_KIND_UAC },
-    { "vendor iso, hs 125us (diag)", DECK_KIND_VENDOR },
-    { "bulk only",                   DECK_KIND_NONE },
+    { "UAC2 mic, hs 125us",          DECK_KIND_UAC,    1 },
+    { "vendor iso, hs 125us (diag)", DECK_KIND_VENDOR, 1 },
+    { "bulk only",                   DECK_KIND_NONE,   1 },
+    { "UAC2 mic, hs 250us",          DECK_KIND_UAC,    2 },
+    { "UAC2 mic, hs 500us",          DECK_KIND_UAC,    3 },
+    { "vendor iso, hs 250us (diag)", DECK_KIND_VENDOR, 2 },
+    { "vendor iso, hs 500us (diag)", DECK_KIND_VENDOR, 3 },
 };
 
 /* Interface association: groups IF1 (control) and IF2 (streaming) into one audio function. Emitted
@@ -68,7 +72,7 @@ void deck_desc_build(struct deck_speed_set *s, struct DeviceDescriptor *dev, con
         unsigned char cls = uac ? 0x01 : 0xFF, proto = uac ? 0x20 : 0;
 
         ep[2] = (struct EndpointDescriptor){
-            7, 5, 0x83, 0x05, deck_iso_packet(hs ? 8000 : 1000), 1,
+            7, 5, 0x83, 0x05, deck_iso_packet(deck_iso_rate(v, hs)), hs ? v->hs_interval : 1,
             uac ? deck_ep_iso_extra : 0, uac ? sizeof(deck_ep_iso_extra) : 0,
         };
         if (uac) {

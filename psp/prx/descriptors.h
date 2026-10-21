@@ -14,9 +14,16 @@ enum { DECK_KIND_UAC, DECK_KIND_VENDOR, DECK_KIND_NONE };
 struct deck_variant {
     const char *name;
     unsigned char kind;
+    unsigned char hs_interval;  /* iso bInterval at hi-speed: packets every 2^(n-1) microframes */
 };
 
-#define DECK_NVARIANTS 3
+#define DECK_NVARIANTS 7
+
+/* Iso packets per second for a variant at the given speed. */
+static inline int deck_iso_rate(const struct deck_variant *v, int hs)
+{
+    return hs ? 8000 >> (v->hs_interval - 1) : 1000;
+}
 
 struct deck_speed_set {
     struct EndpointDescriptor ep[4] __attribute__((aligned(16)));  /* last entry = terminator */

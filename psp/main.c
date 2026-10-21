@@ -18,7 +18,7 @@ PSP_HEAP_SIZE_KB(-1024);
 
 /* deck.prx layout 0: vendor bulk link + UAC2 microphone. */
 #define USB_LAYOUT 0
-#define MIC_BLOCK 512             /* samples per sceAudioInputBlocking (multiple of 64): ~11.6 ms */
+#define MIC_BLOCK 512             /* samples per sceAudioInput (multiple of 64): ~11.6 ms */
 #define IDLE_DIM_US (60 * 1000000u)
 
 static const unsigned g_assignable[] = {
@@ -38,6 +38,7 @@ typedef struct {
 static volatile int g_run = 1;
 static volatile int g_hello;          /* 0 = waiting, 1 = connected, -1 = version mismatch */
 static volatile int g_mac_version, g_mouse, g_muted, g_mic_gain, g_mic_live;
+static volatile int g_mic_blocks;
 static SceUID g_lock;
 static deck_view g_view;
 static unsigned char g_rx[DECK_MAX_FRAME] __attribute__((aligned(64)));
@@ -182,32 +183,40 @@ static int link_thread(SceSize a, void *p)
     return 0;
 }
 
-/* Captures the built-in mic while the Mac has the PSP input open (UAC2 alt 1) and hands it to deck.prx. */
+static volatile int g_usb_ready;  /* deck.prx is loaded, so deckUsbInfo / deckMicPush may be called */
+
+/* Captures the built-in mic continuously from startup and hands every block to deck.prx (which only streams
+ * it while the Mac has the input open). The input must never stop: once a 64-sample hardware chunk passes with
+ * no request pending, the next sceAudioInput redoes the DMA setup and codec programming over I2C, and that
+ * hangs while iso packets are flowing. sceAudioInputBlocking waits for the previous block and then queues the
+ * next one before returning, so ping-ponging two buffers always leaves a request queued. */
 static int mic_thread(SceSize a, void *p)
 {
-    static short buf[MIC_BLOCK] __attribute__((aligned(64)));
-    int gain = 1000;  /* forces an init on first use */
+    static short buf[2][MIC_BLOCK] __attribute__((aligned(64)));
+    int cur = 0, gain = g_mic_gain;
 
+    sceAudioInputBlocking(MIC_BLOCK, 44100, buf[cur]);
     while (g_run) {
-        deck_usb_info in;
+        short *done = buf[cur];
 
-        deckUsbInfo(&in);
-        g_mic_live = in.mic_alt != 0;
-        if (!g_mic_live) {
-            sceKernelDelayThread(50000);
-            continue;
-        }
-        if (gain != g_mic_gain) {
-            gain = g_mic_gain;
-            sceAudioInputInit(0, gain, 0);
-        }
-        if (sceAudioInputBlocking(MIC_BLOCK, 44100, buf) < 0) {
+        /* Returns once `done` is full, with the other buffer already queued. */
+        int ret = sceAudioInputBlocking(MIC_BLOCK, 44100, buf[cur ^ 1]);
+        cur ^= 1;
+        if (ret < 0) {
             sceKernelDelayThread(10000);
             continue;
         }
+        g_mic_blocks++;
+        /* Reprogramming the codec gain is I2C traffic too, so only while nothing is streaming. */
+        if (gain != g_mic_gain && !g_mic_live) {
+            gain = g_mic_gain;
+            sceAudioInputInit(0, gain, 0);
+        }
+        if (!g_usb_ready)
+            continue;
         if (g_muted)
-            memset(buf, 0, sizeof(buf));
-        deckMicPush(buf, MIC_BLOCK);
+            memset(done, 0, MIC_BLOCK * sizeof(short));
+        deckMicPush(done, MIC_BLOCK);
     }
     return 0;
 }
@@ -371,6 +380,14 @@ int main(int argc, char **argv)
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     g_lock = sceKernelCreateSema("view", 0, 1, 1, NULL);
+    /* Start capturing before USB comes up (see mic_thread), and give the input a moment to get going. */
+    sceAudioInputInit(0, g_mic_gain, 0);
+    sceKernelStartThread(sceKernelCreateThread("mic", mic_thread, 0x12, 0x4000, 0, NULL), 0, NULL);
+    {
+        int waited;
+        for (waited = 0; waited < 50 && !g_mic_blocks; waited++)
+            sceKernelDelayThread(10000);
+    }
     apps_init();
     ui_init();
 
@@ -383,8 +400,7 @@ int main(int argc, char **argv)
         start = deckUsbStart();
         if (start >= 0) {
             sceKernelStartThread(sceKernelCreateThread("link", link_thread, 0x18, 0x4000, 0, NULL), 0, NULL);
-            /* Higher priority than the UI so a slow frame never starves the capture. */
-            sceKernelStartThread(sceKernelCreateThread("mic", mic_thread, 0x12, 0x4000, 0, NULL), 0, NULL);
+            g_usb_ready = 1;
         }
     }
 
@@ -407,6 +423,11 @@ int main(int argc, char **argv)
         sceKernelWaitSema(g_lock, 1, NULL);
         view = g_view;
         sceKernelSignalSema(g_lock, 1);
+        if (g_usb_ready) {
+            deck_usb_info in;
+            deckUsbInfo(&in);
+            g_mic_live = in.mic_alt != 0;  /* the Mac has the PSP input open */
+        }
         apps_frame_begin();
         if (g_hello == 1) {
             /* In mouse mode CIRCLE is a click, so it does not pick an app. */
@@ -425,6 +446,7 @@ int main(int argc, char **argv)
 
     if (dimmed)
         deckSetBacklight(1);
+    g_usb_ready = 0;
     if (mod >= 0)
         deckUsbStop();
     ui_term();

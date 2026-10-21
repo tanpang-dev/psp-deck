@@ -18,7 +18,9 @@ typedef struct {
     int variant_ret[8];        /* sceUsbStart result per layout tried */
     int ep3_num, iso_timeouts, iso_nlog, uac_answered, iso_behind;
     int ep0_sent, ep0_done, ep0_ret;
-    int mic_underruns, mic_dropped;  /* iso packets with nothing captured / samples dropped for latency */
+    int mic_underruns, mic_dropped;
+    int nalt, alt_log[6];
+    int mic_pushes_live, mic_sent;    /* pushes received while streaming / samples actually sent */             /* alternate-setting notifications, see driver.c log_alt */  /* iso packets with nothing captured / samples dropped for latency */
     int iso_log[8][3];         /* last completions: returnCode, transmitted, microseconds */
     int nreq;                  /* control requests seen; last 8 kept raw in req_log */
     unsigned char req_log[8][8];

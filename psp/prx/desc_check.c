@@ -71,7 +71,7 @@ static void check(const struct deck_variant *v, int hs)
             assert(len == 7);
             if (out[i + 2] == 0x83) {
                 iso_mps = out[i + 4] | out[i + 5] << 8;
-                assert((out[i + 3] & 3) == 1 && out[i + 6] == 1);
+                assert((out[i + 3] & 3) == 1 && out[i + 6] == (hs ? v->hs_interval : 1));
             }
         }
         i += len;
@@ -82,7 +82,7 @@ static void check(const struct deck_variant *v, int hs)
         assert(deck_dev_hi.bDeviceClass == 0xEF);
     }
     if (v->kind != DECK_KIND_NONE)
-        assert(iso_mps >= (MIC_RATE / (hs ? 8000 : 1000) + 1) * 2 && iso_mps <= (hs ? 1024 : 1023));
+        assert(iso_mps >= (MIC_RATE / deck_iso_rate(v, hs) + 1) * 2 && iso_mps <= (hs ? 1024 : 1023));
 }
 
 int main(void)

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "../../proto/deck_proto.h"
 
 #define NPKT    500      /* per transfer: 62.5 ms at 125 us */
@@ -98,8 +99,12 @@ int main(int argc, char **argv)
             g_inflight++;
         }
     }
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     while (g_inflight > 0)
         libusb_handle_events(NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
 
     /* The test tone repeats every 50 samples, so a lost or repeated packet breaks the period. */
     for (int i = 50; i < g_nstream; i++) {
@@ -111,9 +116,10 @@ int main(int argc, char **argv)
             last = i;
         }
     }
-    printf("packets %d (%.2f s), bad status %d, with data %d\n", g_total, g_total / 8000.0, g_bad, g_nonzero);
-    printf("samples %d = %.0f per second, period breaks %d samples / %d events\n", g_nstream,
-           g_nstream / (g_total / 8000.0), breaks, events);
+    printf("packets %d in %.2f s (%.0f per second), bad status %d, with data %d\n", g_total, secs, g_total / secs,
+           g_bad, g_nonzero);
+    printf("samples %d = %.0f per second, period breaks %d samples / %d events\n", g_nstream, g_nstream / secs,
+           breaks, events);
     if (argc > 1) {
         char path[1024];
         snprintf(path, sizeof(path), "%s.pcm", argv[1]);
