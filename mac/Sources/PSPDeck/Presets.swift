@@ -36,6 +36,7 @@ let presets: [Preset] = [
     Preset(id: "reopenTab", title: "閉じたタブを開く", action: .keys("cmd+shift+t"), label: "タブ復元"),
     Preset(id: "reload", title: "再読み込み", action: .keys("cmd+r"), label: "再読み込み"),
     Preset(id: "previousApp", title: "直前のアプリに戻る", action: .keys("cmd+tab"), label: "前のアプリ"),
+    Preset(id: "quitApp", title: "アプリを終了", action: .keys("cmd+q"), label: "終了"),
     Preset(id: "lockScreen", title: "画面をロック", action: .keys("ctrl+cmd+q"), label: "ロック"),
     // The Mission Control key sends a special HID code, not F3, so open the app it launches instead.
     Preset(id: "missionControl", title: "Mission Control（F3）", action: .open("/System/Applications/Mission Control.app"),
