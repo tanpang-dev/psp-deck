@@ -18,7 +18,8 @@ PSP_HEAP_SIZE_KB(-1024);
 
 /* deck.prx layout 0: vendor bulk link + UAC2 microphone. */
 #define USB_LAYOUT 0
-#define MIC_BLOCK 512             /* samples per sceAudioInput (multiple of 64): ~11.6 ms */
+#define MIC_BLOCK 1024            /* samples per sceAudioInput (multiple of 64): ~23 ms. Fewer block seams = fewer
+                                   * chances to lose the 64-sample chunk that arrives while the next block is queued */
 #define IDLE_DIM_US (60 * 1000000u)
 
 static const unsigned g_assignable[] = {
@@ -383,7 +384,9 @@ int main(int argc, char **argv)
     g_lock = sceKernelCreateSema("view", 0, 1, 1, NULL);
     /* Start capturing before USB comes up (see mic_thread), and give the input a moment to get going. */
     sceAudioInputInit(0, g_mic_gain, 0);
-    sceKernelStartThread(sceKernelCreateThread("mic", mic_thread, 0x12, 0x4000, 0, NULL), 0, NULL);
+    /* Highest user priority: the next block must be queued within one 64-sample chunk (~1.45 ms) of the
+     * previous one ending, or that chunk is dropped and the stream clicks. */
+    sceKernelStartThread(sceKernelCreateThread("mic", mic_thread, 0x10, 0x4000, 0, NULL), 0, NULL);
     {
         int waited;
         for (waited = 0; waited < 50 && !g_mic_blocks; waited++)

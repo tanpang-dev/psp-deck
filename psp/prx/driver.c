@@ -173,8 +173,9 @@ static const short g_tone[50] = {
 };
 
 #define RING 8192                  /* samples; power of two */
-#define RING_MAX_FILL 2048         /* ~46 ms: older audio is dropped to keep latency low */
-#define RING_TARGET 1024           /* ~23 ms cushion the stream is paced around */
+#define RING_MAX_FILL 3072         /* ~70 ms: older audio is dropped to keep latency low */
+#define RING_TARGET 1536           /* ~35 ms cushion the stream is paced around (1.5 capture blocks) */
+#define RING_SLACK 768             /* half a capture block: the sawtooth a block arrival makes in the fill */
 
 static short g_ring[RING];
 static unsigned g_ring_head, g_ring_tail;  /* free-running; fill = head - tail */
@@ -262,9 +263,9 @@ static void iso_queue(int i)
         if (!g_primed) {
             memset(g_iso_buf[i], 0, n * 2);  /* silence until the cushion is there */
         } else {
-            if (fill > RING_TARGET + 512)
+            if (fill > RING_TARGET + RING_SLACK)
                 n++;
-            else if (fill < RING_TARGET - 512 && n > 1)
+            else if (fill < RING_TARGET - RING_SLACK && n > 1)
                 n--;
             k = ring_take(g_iso_buf[i], n);
             if (k < n) {                     /* ran dry: pad with silence and rebuild the cushion */
